@@ -79,24 +79,32 @@ private fun ProstoHome() {
     }
 
     LaunchedEffect(Unit) {
-        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val activities = if (Build.VERSION.SDK_INT >= 33) {
-            pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.queryIntentActivities(launcherIntent, 0)
-        }
-        apps = activities
-            .filter { it.activityInfo.packageName != context.packageName }
-            .map {
-                LauncherApp(
-                    it.loadLabel(pm).toString(),
-                    it.activityInfo.packageName,
-                    it.loadIcon(pm)
-                )
+        // Discover apps defensively: a single broken third-party app entry
+        // should not crash the entire launcher.
+        apps = runCatching {
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val activities = if (Build.VERSION.SDK_INT >= 33) {
+                pm.queryIntentActivities(launcherIntent, PackageManager.ResolveInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(launcherIntent, 0)
             }
-            .distinctBy { it.packageName }
-            .sortedBy { it.label.lowercase(Locale.getDefault()) }
+
+            activities
+                .filter { it.activityInfo?.packageName != context.packageName }
+                .mapNotNull { resolveInfo ->
+                    runCatching {
+                        val packageName = resolveInfo.activityInfo.packageName
+                        LauncherApp(
+                            resolveInfo.loadLabel(pm)?.toString().orEmpty().ifBlank { packageName },
+                            packageName,
+                            resolveInfo.loadIcon(pm)
+                        )
+                    }.getOrNull()
+                }
+                .distinctBy { it.packageName }
+                .sortedBy { it.label.lowercase(Locale.getDefault()) }
+        }.getOrElse { emptyList() }
     }
 
     val favorites = remember(apps) {
@@ -231,8 +239,11 @@ private fun ProstoHome() {
 }
 
 private fun launchApp(context: android.content.Context, packageName: String) {
-    val intent = context.packageManager.getLaunchIntentForPackage(packageName)
-    if (intent != null) context.startActivity(intent)
+    // Some packages disappear or become unavailable while the drawer is open.
+    runCatching {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+        if (intent != null) context.startActivity(intent)
+    }
 }
 
 @Composable

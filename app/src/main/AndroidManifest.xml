@@ -9,7 +9,7 @@
     <application
         android:allowBackup="true"
         android:label="Prosto Launcher"
-        android:supportsRtl="true"\n        android:enableOnBackInvokedCallback="true"
+        android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
 
         <activity

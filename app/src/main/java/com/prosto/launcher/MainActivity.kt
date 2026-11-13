@@ -120,6 +120,7 @@ private fun ProstoHome() {
         ProstoContent(
             prefs = prefs,
             themeChoice = themeChoice,
+            dark = dark,
             onThemeChange = {
                 themeChoice = it
                 prefs.edit().putString("theme_choice", it.name).apply()
@@ -133,6 +134,7 @@ private fun ProstoHome() {
 private fun ProstoContent(
     prefs: android.content.SharedPreferences,
     themeChoice: LauncherTheme,
+    dark: Boolean,
     onThemeChange: (LauncherTheme) -> Unit
 ) {
     val context = LocalContext.current

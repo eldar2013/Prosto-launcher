@@ -183,6 +183,7 @@ private fun ProstoContent(
 
     val itemRects = remember { mutableStateMapOf<String, Rect>() }
     val blockedRects = remember { mutableStateMapOf<String, Rect>() }
+    var workspaceGridRect by remember { mutableStateOf<Rect?>(null) }
     var draggingPackage by remember { mutableStateOf<String?>(null) }
     var dropTargetPackage by remember { mutableStateOf<String?>(null) }
     var dragPoint by remember { mutableStateOf(Offset.Zero) }
@@ -296,7 +297,54 @@ private fun ProstoContent(
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .onGloballyPositioned { workspaceGridRect = it.boundsInRoot() }
+                    // Жест обрабатывается всей сеткой, а не отдельной иконкой.
+                    // Так long-press не конфликтует с clickable у элемента.
+                    .pointerInput(workspacePackages, itemRects.size) {
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = { start ->
+                                val grid = workspaceGridRect
+                                if (grid != null) {
+                                    val rootPoint = Offset(grid.left + start.x, grid.top + start.y)
+                                    val source = itemRects.entries.firstOrNull { (_, rect) ->
+                                        rect.contains(rootPoint)
+                                    }?.key
+                                    draggingPackage = source
+                                    dropTargetPackage = null
+                                    dragPoint = rootPoint
+                                }
+                            },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                val grid = workspaceGridRect
+                                if (grid != null && draggingPackage != null) {
+                                    dragPoint = Offset(
+                                        grid.left + change.position.x,
+                                        grid.top + change.position.y
+                                    )
+                                    dropTargetPackage = itemRects.entries.firstOrNull { (pkg, rect) ->
+                                        pkg != draggingPackage && rect.contains(dragPoint)
+                                    }?.key
+                                }
+                            },
+                            onDragEnd = {
+                                val source = draggingPackage
+                                val target = dropTargetPackage
+                                if (source != null && target != null) {
+                                    moveApp(source, target)
+                                }
+                                draggingPackage = null
+                                dropTargetPackage = null
+                            },
+                            onDragCancel = {
+                                draggingPackage = null
+                                dropTargetPackage = null
+                            }
+                        )
+                    },
                 contentPadding = PaddingValues(top = 10.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -308,35 +356,6 @@ private fun ProstoContent(
                                 val rect = it.boundsInRoot()
                                 itemRects[app.packageName] = rect
                                 blockedRects[app.packageName] = rect
-                            }
-                            .pointerInput(app.packageName, workspacePackages) {
-                                detectDragGesturesAfterLongPress(
-                                    onDragStart = { start ->
-                                        draggingPackage = app.packageName
-                                        dropTargetPackage = null
-                                        val rect = itemRects[app.packageName]
-                                        dragPoint = if (rect != null) Offset(rect.left + start.x, rect.top + start.y) else start
-                                    },
-                                    onDrag = { change, _ ->
-                                        change.consume()
-                                        val rect = itemRects[app.packageName]
-                                        if (rect != null) {
-                                            dragPoint = Offset(rect.left + change.position.x, rect.top + change.position.y)
-                                        }
-                                        dropTargetPackage = itemRects.entries.firstOrNull { (pkg, targetRect) ->
-                                            pkg != app.packageName && targetRect.contains(dragPoint)
-                                        }?.key
-                                    },
-                                    onDragEnd = {
-                                        moveApp(app.packageName, dropTargetPackage)
-                                        draggingPackage = null
-                                        dropTargetPackage = null
-                                    },
-                                    onDragCancel = {
-                                        draggingPackage = null
-                                        dropTargetPackage = null
-                                    }
-                                )
                             }
                             .clickable {
                                 if (draggingPackage == null) launchApp(context, app.packageName)

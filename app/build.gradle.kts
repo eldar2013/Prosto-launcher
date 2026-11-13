@@ -1,3 +1,4 @@
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,7 +17,19 @@ android {
         versionName = "0.1.0"
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+    }
+
+    // Use the same JVM version for Java and Kotlin
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 }
 
 dependencies {

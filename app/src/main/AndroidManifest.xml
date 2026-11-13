@@ -8,6 +8,8 @@
 
     <application
         android:allowBackup="true"
+        android:icon="@drawable/prosto_launcher_icon"
+        android:roundIcon="@drawable/prosto_launcher_icon"
         android:label="Prosto Launcher"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

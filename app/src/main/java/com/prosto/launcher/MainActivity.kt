@@ -393,18 +393,18 @@ private fun ProstoContent(
                     items(filteredApps, key = { it.packageName }) { app ->
                         Column(
                             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                                .pointerInput(app.packageName, homePackages) {
-                                    detectTapGestures(onLongPress = {
-                                        if (app.packageName !in homePackages) {
-                                            saveHome(homePackages + app.packageName)
-                                            Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "Уже на главном экране", Toast.LENGTH_SHORT).show()
-                                        }
-                                        drawerOpen = false
-                                    })
+                                .combinedClickable(
+                                onClick = { launchApp(context, app.packageName) },
+                                onLongClick = {
+                                    if (app.packageName !in homePackages) {
+                                        saveHome(homePackages + app.packageName)
+                                        Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "Уже на главном экране", Toast.LENGTH_SHORT).show()
+                                    }
+                                    drawerOpen = false
                                 }
-                                .clickable { launchApp(context, app.packageName) }
+                            )
                                 .padding(vertical = 5.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {

@@ -148,8 +148,10 @@ private fun ProstoContent(
     }
     var workspacePackages by remember {
         mutableStateOf(
-            prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
-                ?: oldHome.drop(4)
+            (prefs.getString("workspace_slots", null)?.split("|")
+                ?: oldHome.drop(4)).take(20).let { saved ->
+                    saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+                }
         )
     }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
@@ -181,11 +183,10 @@ private fun ProstoContent(
         }
     }
 
-    val itemRects = remember { mutableStateMapOf<String, Rect>() }
+    val slotRects = remember { mutableStateMapOf<Int, Rect>() }
     val blockedRects = remember { mutableStateMapOf<String, Rect>() }
-    var workspaceGridRect by remember { mutableStateOf<Rect?>(null) }
-    var draggingPackage by remember { mutableStateOf<String?>(null) }
-    var dropTargetPackage by remember { mutableStateOf<String?>(null) }
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
     var dragPoint by remember { mutableStateOf(Offset.Zero) }
 
     fun saveDock(updated: List<String>) {
@@ -193,16 +194,28 @@ private fun ProstoContent(
         prefs.edit().putString("dock_apps_ordered", dockPackages.joinToString("|")).apply()
     }
     fun saveWorkspace(updated: List<String>) {
-        workspacePackages = updated.distinct()
-        prefs.edit().putString("workspace_apps_ordered", workspacePackages.joinToString("|")).apply()
+        workspacePackages = updated.take(20).let { slots ->
+            slots + List((20 - slots.size).coerceAtLeast(0)) { "" }
+        }
+        prefs.edit()
+            .putString("workspace_slots", workspacePackages.joinToString("|"))
+            .putString("workspace_apps_ordered", workspacePackages.filter { it.isNotBlank() }.joinToString("|"))
+            .apply()
     }
     fun addToWorkspace(pkg: String) {
         if (pkg in workspacePackages) {
             Toast.makeText(context, "Уже на рабочем столе", Toast.LENGTH_SHORT).show()
             return
         }
+        val slots = workspacePackages.toMutableList()
+        val emptyIndex = slots.indexOfFirst { it.isBlank() }
+        if (emptyIndex < 0) {
+            Toast.makeText(context, "Рабочий стол заполнен", Toast.LENGTH_SHORT).show()
+            return
+        }
         saveDock(dockPackages.filterNot { it == pkg })
-        saveWorkspace(workspacePackages + pkg)
+        slots[emptyIndex] = pkg
+        saveWorkspace(slots)
         Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
     }
     fun addToDock(pkg: String) {
@@ -219,17 +232,16 @@ private fun ProstoContent(
         Toast.makeText(context, "Добавлено в нижнюю панель", Toast.LENGTH_SHORT).show()
     }
     fun removeFromLauncher(pkg: String) {
-        saveWorkspace(workspacePackages.filterNot { it == pkg })
+        saveWorkspace(workspacePackages.map { if (it == pkg) "" else it })
         saveDock(dockPackages.filterNot { it == pkg })
     }
-    fun moveApp(fromPackage: String, toPackage: String?) {
-        if (toPackage == null || fromPackage == toPackage) return
-        val from = workspacePackages.indexOf(fromPackage)
-        val to = workspacePackages.indexOf(toPackage)
-        if (from < 0 || to < 0) return
+    fun moveApp(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in workspacePackages.indices || toIndex !in workspacePackages.indices || fromIndex == toIndex) return
         val changed = workspacePackages.toMutableList()
-        val moved = changed.removeAt(from)
-        changed.add(to.coerceIn(0, changed.size), moved)
+        val moved = changed[fromIndex]
+        if (moved.isBlank()) return
+        changed[fromIndex] = changed[toIndex]
+        changed[toIndex] = moved
         saveWorkspace(changed)
     }
 
@@ -259,7 +271,6 @@ private fun ProstoContent(
     }
 
     val appMap = remember(apps) { apps.associateBy { it.packageName } }
-    val workspaceApps = workspacePackages.mapNotNull { appMap[it] }
     val dockApps = dockPackages.mapNotNull { appMap[it] }
     val filteredApps = apps.filter { it.label.contains(search, ignoreCase = true) }
 
@@ -297,78 +308,83 @@ private fun ProstoContent(
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .onGloballyPositioned { workspaceGridRect = it.boundsInRoot() },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(top = 10.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(workspaceApps, key = { it.packageName }) { app ->
+                items(20, key = { it }) { index ->
+                    val pkg = workspacePackages.getOrNull(index).orEmpty()
+                    val app = appMap[pkg]
                     Box(
-                        Modifier.fillMaxWidth()
-                            .onGloballyPositioned {
-                                val rect = it.boundsInRoot()
-                                itemRects[app.packageName] = rect
-                                blockedRects[app.packageName] = rect
+                        Modifier.fillMaxWidth().height(86.dp)
+                            .onGloballyPositioned { coordinates ->
+                                val rect = coordinates.boundsInRoot()
+                                slotRects[index] = rect
+                                blockedRects["workspace-$index"] = rect
                             }
-                            .pointerInput(app.packageName, workspacePackages) {
+                            .pointerInput(index, workspacePackages) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { start ->
-                                        val rect = itemRects[app.packageName]
-                                        draggingPackage = app.packageName
-                                        dropTargetPackage = null
-                                        if (rect != null) {
-                                            dragPoint = Offset(rect.left + start.x, rect.top + start.y)
+                                        if (app != null) {
+                                            draggingIndex = index
+                                            dropTargetIndex = null
+                                            val rect = slotRects[index]
+                                            if (rect != null) dragPoint = Offset(rect.left + start.x, rect.top + start.y)
                                         }
                                     },
                                     onDrag = { change, _ ->
-                                        change.consume()
-                                        val rect = itemRects[app.packageName]
-                                        if (rect != null) {
-                                            dragPoint = Offset(rect.left + change.position.x, rect.top + change.position.y)
-                                            dropTargetPackage = itemRects.entries.firstOrNull { (pkg, bounds) ->
-                                                pkg != app.packageName && bounds.contains(dragPoint)
-                                            }?.key
+                                        if (draggingIndex != null) {
+                                            change.consume()
+                                            val rect = slotRects[index]
+                                            if (rect != null) {
+                                                dragPoint = Offset(rect.left + change.position.x, rect.top + change.position.y)
+                                                dropTargetIndex = slotRects.entries.firstOrNull { (_, bounds) ->
+                                                    bounds.contains(dragPoint)
+                                                }?.key
+                                            }
                                         }
                                     },
                                     onDragEnd = {
-                                        val target = dropTargetPackage
-                                        if (target != null) moveApp(app.packageName, target)
-                                        draggingPackage = null
-                                        dropTargetPackage = null
+                                        val from = draggingIndex
+                                        val target = dropTargetIndex
+                                        if (from != null && target != null) moveApp(from, target)
+                                        draggingIndex = null
+                                        dropTargetIndex = null
                                     },
                                     onDragCancel = {
-                                        draggingPackage = null
-                                        dropTargetPackage = null
+                                        draggingIndex = null
+                                        dropTargetIndex = null
                                     }
                                 )
                             }
-                            .clickable {
-                                if (draggingPackage == null) launchApp(context, app.packageName)
-                            }
-                    ) {
-                        Column(
-                            Modifier.fillMaxWidth().graphicsLayer {
-                                alpha = if (draggingPackage == app.packageName) 0.45f else 1f
-                                scaleX = if (draggingPackage == app.packageName) 1.06f else 1f
-                                scaleY = if (draggingPackage == app.packageName) 1.06f else 1f
+                            .clickable(enabled = app != null && draggingIndex == null) {
+                                app?.let { launchApp(context, it.packageName) }
                             },
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            AppImage(app, 54)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                app.label, fontSize = 11.sp, maxLines = 2,
-                                overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, color = Color.White
-                            )
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (app != null) {
+                            Column(
+                                Modifier.fillMaxWidth().graphicsLayer {
+                                    alpha = if (draggingIndex == index) 0.45f else 1f
+                                    scaleX = if (draggingIndex == index) 1.06f else 1f
+                                    scaleY = if (draggingIndex == index) 1.06f else 1f
+                                },
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                AppImage(app, 54)
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    app.label, fontSize = 11.sp, maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, color = Color.White
+                                )
+                            }
                         }
-                        if (dropTargetPackage == app.packageName) {
+                        if (dropTargetIndex == index) {
                             Box(
                                 Modifier.matchParentSize().padding(2.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(Lavender.copy(alpha = 0.22f))
+                                    .background(Lavender.copy(alpha = 0.28f))
                                     .border(2.dp, Lavender, RoundedCornerShape(14.dp))
                             )
                         }

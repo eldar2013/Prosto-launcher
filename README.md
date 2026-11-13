@@ -1,21 +1,21 @@
-# Prosto Launcher — v0.2.0
+# Prosto Launcher
 
-Pixel / Material You style Android launcher built with Kotlin + Jetpack Compose.
+Android launcher built with Kotlin + Jetpack Compose.
 
-## Included
-- HOME/DEFAULT launcher intent filters.
-- System-aware light/dark appearance.
-- Android 12+ dynamic Material You color schemes.
-- Large clock and localized date.
-- Simple search entry point that opens the app drawer.
-- Swipe up to open the app drawer; swipe down or tap Done to close.
-- Installed-app discovery, filtering, icons, and launching.
-- Best-effort dock favorites based on common Google/AOSP package names, with fallback to first four apps.
+## Included in this version
+
+- Purple/lavender visual palette with Light, Dark and System theme choices.
+- Bundled purple landscape wallpaper (`prosto_wallpaper.png`).
+- Wallpaper selection from the device gallery and a reset-to-default option.
+- Long-press the free workspace area to open launcher settings.
+- Home screen app grid and a five-position dock: four app slots and the app-drawer button in the center.
+- Animated app drawer with app search.
+- Long-press an app in the drawer to add it to the home screen; existing shortcuts are not replaced.
+- Long-press a home-screen or dock app to remove it.
+- Adaptive launcher icon on Android 8.0+ with a legacy PNG fallback.
 
 ## Build
-Open in Android Studio, sync Gradle, then run `app` on an Android device or emulator.
-Select Prosto Launcher as the default Home app in Android settings.
 
-## Compatibility
-minSdk 26 (Android 8.0). Dynamic wallpaper-derived color schemes are available on Android 12+;
-older versions fall back to Material 3 light/dark palettes. Device-specific behavior still needs testing.
+The GitHub Actions workflow builds a debug APK on every push and on manual workflow dispatch.
+
+In GitHub, open **Actions → Build Prosto Launcher APK → latest run → Artifacts → Prosto-Launcher-APK**.

@@ -38,9 +38,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -75,12 +72,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
@@ -93,7 +87,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -124,6 +117,11 @@ private val DarkInk = Color(0xFF171326)
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            window.setBackgroundBlurRadius(0)
+            window.setBlurBehindRadius(0)
+        }
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
         setContent { ProstoHome() }
     }
 }
@@ -609,52 +607,36 @@ private fun ProstoContent(
 
     Box(
         Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages) {
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                val pressStart = down.position
-                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-                var released = false
-                val longPressed = withTimeoutOrNull(longPressTimeout) {
-                    while (true) {
-                        val event = awaitPointerEvent(PointerEventPass.Initial)
-                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                        if (!change.pressed) {
-                            released = true
-                            break
-                        }
-                    }
-                    false
-                } ?: true
-                if (longPressed && !released) {
+            detectTapGestures(
+                onTap = { point ->
                     val blocked = blockedRects.any { (key, rect) ->
                         val occupiedWorkspace = key.startsWith("workspace-") &&
                             workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
                         val occupiedDock = key.startsWith("dock-") &&
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
-                        (occupiedWorkspace || occupiedDock || key == "drawer-button" || key.startsWith("widget-")) && rect.contains(pressStart)
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
                     }
-                    if (!blocked && !drawerOpen && !folderVisible) {
-                        workspaceEditMode = true
+                    if (!blocked) {
+                        workspaceEditMode = false
                         quickMenuOpen = false
+                        selectedWorkspaceWidget = null
+                        resizingWidgetId = null
                     }
+                },
+                onLongPress = { point ->
+                    val blocked = blockedRects.any { (key, rect) ->
+                        val occupiedWorkspace = key.startsWith("workspace-") &&
+                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
+                        val occupiedDock = key.startsWith("dock-") &&
+                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                    }
+                    if (!blocked && !drawerOpen && !folderVisible) { workspaceEditMode = true; quickMenuOpen = false }
                 }
-                if (!released) {
-                    waitForUpOrCancellation(pass = PointerEventPass.Initial)
-                }
-            }
+            )
         }
     ) {
-        Box(
-            Modifier.fillMaxSize().graphicsLayer {
-                val p = folderProgress.value.coerceIn(0f, 1f)
-                scaleX = 1f - 0.06f * p
-                scaleY = 1f - 0.06f * p
-                if (p > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    val radius = 24f * p * density
-                    renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
-                }
-            }
-        ) {
+        Box(Modifier.fillMaxSize()) {
         val activeWallpaper = customWallpaper ?: defaultWallpaper
         if (activeWallpaper != null) {
             Image(
@@ -759,6 +741,7 @@ private fun ProstoContent(
                                         pressStart = start
                                         movedFar = false
                                         if (app != null || isFolder) {
+                                            workspaceEditMode = true
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -933,9 +916,7 @@ private fun ProstoContent(
                             }
                         }
                         Box(
-                            modifier = widgetModifier.onGloballyPositioned {
-                                blockedRects["widget-${widget.id}"] = it.boundsInRoot()
-                            }.pointerInput(widget.id) {
+                            modifier = widgetModifier.pointerInput(widget.id) {
                                 detectDragGestures(
                                     onDragStart = { draggingWidget = true },
                                     onDragEnd = { draggingWidget = false },
@@ -1047,22 +1028,13 @@ private fun ProstoContent(
             }
 
 
+        }
+
+        // Нижняя панель вынесена в отдельный полноэкранный слой, чтобы её положение
+        // не зависело от размеров сетки рабочего стола.
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
             Row(
-                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                repeat(workspacePageCount) { page ->
-                    Box(
-                        Modifier.padding(horizontal = 5.dp).size(if (page == workspacePage) 10.dp else 6.dp)
-                            .clip(CircleShape)
-                            .background(if (page == workspacePage) Lavender else Lavender.copy(alpha = 0.45f))
-                            .clickable { switchWorkspacePage(page) }
-                    )
-                }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(bottom = 18.dp, top = 8.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 18.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
@@ -1081,7 +1053,20 @@ private fun ProstoContent(
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
             }
         }
-
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 88.dp, top = 2.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            repeat(workspacePageCount) { page ->
+                Box(
+                    Modifier.padding(horizontal = 5.dp).size(if (page == workspacePage) 10.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(if (page == workspacePage) Lavender else Lavender.copy(alpha = 0.45f))
+                        .clickable { switchWorkspacePage(page) }
+                )
+            }
+        }
         }
 
         AnimatedVisibility(
@@ -1232,10 +1217,9 @@ private fun ProstoContent(
             )
         }
 
-        Box(Modifier.fillMaxSize()) {
         AnimatedVisibility(
             visible = workspaceEditMode,
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 12.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 174.dp),
             enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut(tween(120)) + slideOutVertically(targetOffsetY = { it / 2 })
         ) {
@@ -1279,7 +1263,6 @@ private fun ProstoContent(
                 onClick = { confirmDeleteWorkspacePage = true },
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = 18.dp)
             ) { Text("Удалить этот экран", color = Color.White) }
-        }
         }
         if (confirmDeleteWorkspacePage) {
             AlertDialog(
@@ -1478,12 +1461,7 @@ private fun ProstoContent(
                     },
                 contentAlignment = Alignment.Center
             ) {
-                // Затемнение фона плавно проявляется вместе с размытием.
-                Box(
-                    Modifier.matchParentSize()
-                        .graphicsLayer { alpha = folderProgress.value.coerceIn(0f, 1f) }
-                        .background(Color.Black.copy(alpha = 0.28f))
-                )
+                // Фон рабочего стола остаётся чётким при открытии папки.
                 Surface(
                     modifier = Modifier
                         .padding(horizontal = 24.dp)

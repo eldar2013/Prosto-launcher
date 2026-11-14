@@ -946,7 +946,7 @@ private fun ProstoContent(
                                         }
                                     }
                                 }
-                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.BottomEnd).padding(4.dp).size(18.dp).clip(CircleShape).background(Color.White)
+                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.End).padding(4.dp).size(18.dp).clip(CircleShape).background(Color.White)
                                     .pointerInput(widget.id) {
                                         detectDragGestures(
                                             onDragStart = { draggingWidget = true },

@@ -759,7 +759,11 @@ private fun ProstoContent(
                             onClick = {
                                 selectedApp = null
                                 runCatching {
-                                    uninstallLauncher.launch(Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:${app.packageName}")).putExtra(Intent.EXTRA_RETURN_RESULT, true))
+                                    uninstallLauncher.launch(
+                                        Intent(Intent.ACTION_DELETE).apply {
+                                            data = Uri.parse("package:${app.packageName}")
+                                        }
+                                    )
                                 }.onFailure {
                                     Toast.makeText(context, "Не удалось открыть удаление", Toast.LENGTH_SHORT).show()
                                 }

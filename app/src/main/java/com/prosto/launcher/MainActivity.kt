@@ -613,6 +613,12 @@ private fun ProstoContent(
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
                         (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
                     }
+                    if (!blocked) {
+                        workspaceEditMode = false
+                        quickMenuOpen = false
+                        selectedWorkspaceWidget = null
+                        resizingWidgetId = null
+                    }
                 },
                 onLongPress = { point ->
                     val blocked = blockedRects.any { (key, rect) ->
@@ -742,6 +748,7 @@ private fun ProstoContent(
                                         pressStart = start
                                         movedFar = false
                                         if (app != null || isFolder) {
+                                            workspaceEditMode = true
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -915,7 +922,48 @@ private fun ProstoContent(
                                 }
                             }
                         }
-                        Box(modifier = widgetModifier) {
+                        Box(
+                            modifier = widgetModifier.pointerInput(widget.id) {
+                                detectDragGestures(
+                                    onDragStart = { draggingWidget = true },
+                                    onDragEnd = { draggingWidget = false },
+                                    onDragCancel = { draggingWidget = false },
+                                    onDrag = { change, drag ->
+                                        change.consume()
+                                        val density = this.density
+                                        val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
+                                            ?: return@detectDragGestures
+                                        val candidate = current.copy(
+                                            x = (current.x + drag.x / density)
+                                                .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f)),
+                                            y = (current.y + drag.y / density)
+                                                .coerceIn(0f, (490f - current.height).coerceAtLeast(0f))
+                                        )
+                                        val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
+                                        if (others.none { widgetsOverlap(candidate, it) }) {
+                                            saveWorkspaceWidgets(latestWorkspaceWidgets.value.map {
+                                                if (it.id == widget.id) candidate else it
+                                            })
+                                        }
+                                    }
+                                )
+                            }.graphicsLayer {
+                                if (workspaceEditMode) {
+                                    scaleX = 0.94f
+                                    scaleY = 0.94f
+                                    val density = this.density
+                                    val centerX = (widget.x + widget.width / 2f) * density
+                                    val centerY = (widget.y + widget.height / 2f + 10f) * density
+                                    translationX = (configuration.screenWidthDp * density / 2f - centerX) * 0.08f
+                                    translationY = (configuration.screenHeightDp * density / 2f - centerY) * 0.06f
+                                } else {
+                                    scaleX = 1f
+                                    scaleY = 1f
+                                    translationX = 0f
+                                    translationY = 0f
+                                }
+                            }
+                        ) {
                         Surface(
                             modifier = Modifier.fillMaxSize(),
                             shape = RoundedCornerShape(18.dp),
@@ -925,29 +973,7 @@ private fun ProstoContent(
                         ) {
                             Column(Modifier.fillMaxSize()) {
                                 Row(
-                                    Modifier.fillMaxWidth().height(26.dp).background(Color.Transparent)
-                                        .pointerInput(widget.id) {
-                                            detectDragGestures(
-                                                onDragStart = { draggingWidget = true },
-                                                onDragEnd = { draggingWidget = false },
-                                                onDragCancel = { draggingWidget = false },
-                                                onDrag = { change, drag ->
-                                                change.consume()
-                                                val density = this.density
-                                                val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id } ?: return@detectDragGestures
-                                                val candidate = current.copy(
-                                                    x = (kotlin.math.round((current.x + drag.x / density) / gridCellPitch) * gridCellPitch)
-                                                        .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f)),
-                                                    y = (kotlin.math.round((current.y + drag.y / density) / 98f) * 98f)
-                                                        .coerceIn(0f, (490f - current.height).coerceAtLeast(0f))
-                                                )
-                                                val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
-                                                if (others.none { widgetsOverlap(candidate, it) }) {
-                                                    saveWorkspaceWidgets(latestWorkspaceWidgets.value.map { if (it.id == widget.id) candidate else it })
-                                                }
-                                                }
-                                            )
-                                        },
+                                    Modifier.fillMaxWidth().height(26.dp).background(Color.Transparent),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Spacer(Modifier.weight(1f))
@@ -997,10 +1023,10 @@ private fun ProstoContent(
                             Text("⋮", color = Color.White, fontSize = 18.sp)
                         }
                         if (resizingWidgetId == widget.id) {
-                            WidgetResizeKnob(Modifier.align(Alignment.CenterStart), "left", resizeBy)
-                            WidgetResizeKnob(Modifier.align(Alignment.CenterEnd), "right", resizeBy)
-                            WidgetResizeKnob(Modifier.align(Alignment.TopCenter), "top", resizeBy)
-                            WidgetResizeKnob(Modifier.align(Alignment.BottomCenter), "bottom", resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.CenterStart), "left", gridCellPitch, resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.CenterEnd), "right", gridCellPitch, resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.TopCenter), "top", gridCellPitch, resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.BottomCenter), "bottom", gridCellPitch, resizeBy)
                         }
                     }
                 }
@@ -1009,6 +1035,20 @@ private fun ProstoContent(
             }
 
 
+            Row(
+                Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 2.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(workspacePageCount) { page ->
+                    Box(
+                        Modifier.padding(horizontal = 5.dp).size(if (page == workspacePage) 10.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(if (page == workspacePage) Lavender else Lavender.copy(alpha = 0.45f))
+                            .clickable { switchWorkspacePage(page) }
+                    )
+                }
+            }
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 18.dp, top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1027,20 +1067,6 @@ private fun ProstoContent(
                 }
                 DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                repeat(workspacePageCount) { page ->
-                    Box(
-                        Modifier.padding(horizontal = 5.dp).size(if (page == workspacePage) 10.dp else 6.dp)
-                            .clip(CircleShape)
-                            .background(if (page == workspacePage) Lavender else Lavender.copy(alpha = 0.45f))
-                            .clickable { switchWorkspacePage(page) }
-                    )
-                }
             }
         }
 
@@ -1671,16 +1697,49 @@ private fun ProstoContent(
 private fun WidgetResizeKnob(
     modifier: Modifier,
     edge: String,
+    horizontalStep: Float,
     onResize: (String, Float, Float) -> Unit
 ) {
     Box(
         modifier = modifier.padding(2.dp).size(20.dp).clip(CircleShape)
             .background(Color.White).border(1.dp, Purple, CircleShape)
             .pointerInput(edge) {
-                detectDragGestures { change, drag ->
+                var accumulatedX = 0f
+                var accumulatedY = 0f
+                detectDragGestures(
+                    onDragStart = {
+                        accumulatedX = 0f
+                        accumulatedY = 0f
+                    },
+                    onDragEnd = {
+                        accumulatedX = 0f
+                        accumulatedY = 0f
+                    },
+                    onDragCancel = {
+                        accumulatedX = 0f
+                        accumulatedY = 0f
+                    }
+                ) { change, drag ->
                     change.consume()
                     val density = this.density
-                    onResize(edge, drag.x / density, drag.y / density)
+                    accumulatedX += drag.x / density
+                    accumulatedY += drag.y / density
+                    val verticalStep = 98f
+                    val dx = if (edge == "left" || edge == "right") {
+                        if (kotlin.math.abs(accumulatedX) >= horizontalStep) {
+                            val step = kotlin.math.sign(accumulatedX) * horizontalStep
+                            accumulatedX -= step
+                            step
+                        } else 0f
+                    } else 0f
+                    val dy = if (edge == "top" || edge == "bottom") {
+                        if (kotlin.math.abs(accumulatedY) >= verticalStep) {
+                            val step = kotlin.math.sign(accumulatedY) * verticalStep
+                            accumulatedY -= step
+                            step
+                        } else 0f
+                    } else 0f
+                    if (dx != 0f || dy != 0f) onResize(edge, dx, dy)
                 }
             }
     )

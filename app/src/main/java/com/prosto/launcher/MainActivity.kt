@@ -11,6 +11,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import android.util.Base64
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,7 +22,11 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -30,6 +35,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -41,6 +49,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -48,17 +57,23 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -164,6 +179,17 @@ private fun ProstoContent(
     }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
     var openedFolder by remember { mutableStateOf<String?>(null) }
+    // Отдельный флаг видимости нужен, чтобы карточка папки успевала плавно закрыться.
+    var folderVisible by remember { mutableStateOf(false) }
+    var folderOverlayAlive by remember { mutableStateOf(false) }
+    var folderOrigin by remember { mutableStateOf(Offset.Unspecified) }
+    var overlayCenter by remember { mutableStateOf(Offset.Zero) }
+    val folderProgress = remember { Animatable(0f) }
+    var folderMenuKey by remember { mutableStateOf<String?>(null) }
+    var renamingFolder by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var memberMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var addToFolderKey by remember { mutableStateOf<String?>(null) }
     var iconShapeChoice by remember {
         mutableStateOf(runCatching { IconShapeChoice.valueOf(prefs.getString("icon_shape", "CIRCLE") ?: "CIRCLE") }
             .getOrDefault(IconShapeChoice.CIRCLE))
@@ -173,6 +199,12 @@ private fun ProstoContent(
         mutableStateOf(prefs.getStringSet("folder_contents", emptySet())?.mapNotNull { entry ->
             val split = entry.split(":", limit = 2)
             if (split.size == 2) split[0] to split[1].split(",").filter { it.isNotBlank() } else null
+        }?.toMap().orEmpty())
+    }
+    var folderNames by remember {
+        mutableStateOf(prefs.getStringSet("folder_names", emptySet())?.mapNotNull { entry ->
+            val split = entry.split(":", limit = 2)
+            if (split.size == 2 && split[1].isNotBlank()) split[0] to split[1] else null
         }?.toMap().orEmpty())
     }
     var wallpaperUri by remember { mutableStateOf(prefs.getString("wallpaper_uri", null)) }
@@ -261,6 +293,14 @@ private fun ProstoContent(
             "$key:${values.joinToString(",")}"
         }.toSet()).apply()
     }
+    fun persistFolderNames(updated: Map<String, String>) {
+        folderNames = updated
+        prefs.edit().putStringSet("folder_names", updated.map { (key, value) -> "$key:$value" }.toSet()).apply()
+    }
+    fun renameFolder(key: String, newName: String) {
+        val clean = newName.trim().take(24)
+        persistFolderNames(if (clean.isBlank()) folderNames - key else folderNames + (key to clean))
+    }
     fun moveApp(fromIndex: Int, toIndex: Int) {
         if (fromIndex !in workspacePackages.indices || toIndex !in workspacePackages.indices || fromIndex == toIndex) return
         val changed = workspacePackages.toMutableList()
@@ -300,14 +340,114 @@ private fun ProstoContent(
     val dockApps = dockPackages.mapNotNull { appMap[it] }
     val filteredApps = apps.filter { it.label.contains(search, ignoreCase = true) }
 
+    fun folderTitle(key: String): String = folderNames[key] ?: "Папка"
+
+    // Достаёт приложение из папки. Если в папке остаётся меньше двух приложений, папка исчезает,
+    // а оставшееся приложение встаёт на её место. Возвращает true, если папка исчезла.
+    fun takeOutOfFolder(folderKey: String, pkg: String, placeOnDesktop: Boolean): Boolean {
+        val members = folderContents[folderKey].orEmpty()
+        val rest = members - pkg
+        val slots = workspacePackages.toMutableList()
+        val dissolve = rest.size < 2
+        if (dissolve) {
+            persistFolders(folderContents - folderKey)
+            persistFolderNames(folderNames - folderKey)
+            val remaining = rest.firstOrNull().orEmpty()
+            val slot = slots.indexOf(folderKey)
+            if (slot >= 0) {
+                slots[slot] = remaining
+            } else if (remaining.isNotBlank()) {
+                val empty = slots.indexOfFirst { it.isBlank() }
+                if (empty >= 0) slots[empty] = remaining
+            }
+        } else {
+            persistFolders(folderContents + (folderKey to rest))
+        }
+        if (placeOnDesktop) {
+            val empty = slots.indexOfFirst { it.isBlank() }
+            if (empty >= 0) {
+                slots[empty] = pkg
+            } else {
+                Toast.makeText(context, "На рабочем столе нет места — приложение осталось в списке всех приложений", Toast.LENGTH_LONG).show()
+            }
+        }
+        saveWorkspace(slots)
+        return dissolve
+    }
+
+    fun addAppToFolder(folderKey: String, pkg: String) {
+        val members = folderContents[folderKey].orEmpty()
+        if (pkg in members) return
+        saveWorkspace(workspacePackages.map { if (it == pkg) "" else it })
+        saveDock(dockPackages.filterNot { it == pkg })
+        persistFolders(folderContents + (folderKey to (members + pkg)))
+    }
+
+    fun moveAppBetweenFolders(fromKey: String, pkg: String, toKey: String) {
+        if (fromKey == toKey) return
+        takeOutOfFolder(fromKey, pkg, placeOnDesktop = false)
+        persistFolders(folderContents + (toKey to (folderContents[toKey].orEmpty() + pkg)))
+    }
+
+    // Удаляет папку целиком. Приложения из неё возвращаются на рабочий стол (если есть место).
+    fun deleteFolder(key: String) {
+        val members = folderContents[key].orEmpty().filter { it in appMap }
+        val slots = workspacePackages.toMutableList()
+        val slot = slots.indexOf(key)
+        if (slot >= 0) slots[slot] = ""
+        var notPlaced = 0
+        members.forEach { member ->
+            val empty = slots.indexOfFirst { it.isBlank() }
+            if (empty >= 0) slots[empty] = member else notPlaced++
+        }
+        saveWorkspace(slots)
+        persistFolders(folderContents - key)
+        persistFolderNames(folderNames - key)
+        if (notPlaced > 0) {
+            Toast.makeText(context, "Не все приложения поместились на рабочий стол — остальные есть в списке всех приложений", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // Открывает папку «из иконки»: запоминаем, где иконка папки лежит на экране.
+    fun openFolder(key: String) {
+        val slot = workspacePackages.indexOf(key)
+        folderOrigin = slotRects[slot]?.center ?: Offset.Unspecified
+        openedFolder = key
+        folderVisible = true
+    }
+
+    // Анимация как на iPhone: карточка пружинисто вырастает из иконки, закрытие — плавно сворачивается обратно.
+    LaunchedEffect(folderVisible) {
+        if (folderVisible) {
+            folderOverlayAlive = true
+            folderProgress.animateTo(1f, spring(dampingRatio = 0.8f, stiffness = 300f))
+        } else {
+            folderProgress.animateTo(0f, tween(260, easing = FastOutSlowInEasing))
+            folderOverlayAlive = false
+        }
+    }
+
+    BackHandler(enabled = folderVisible) { folderVisible = false }
+
     Box(
-        Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, blockedRects.size) {
+        Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, folderVisible, blockedRects.size) {
             detectTapGestures(onLongPress = { point ->
                 val blocked = blockedRects.values.any { it.contains(point) }
-                if (!blocked && !drawerOpen) settingsOpen = true
+                if (!blocked && !drawerOpen && !folderVisible) settingsOpen = true
             })
         }
     ) {
+        Box(
+            Modifier.fillMaxSize().graphicsLayer {
+                val p = folderProgress.value.coerceIn(0f, 1f)
+                scaleX = 1f - 0.06f * p
+                scaleY = 1f - 0.06f * p
+                if (p > 0f && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val radius = 24f * p * density
+                    renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
+                }
+            }
+        ) {
         val activeWallpaper = customWallpaper ?: defaultWallpaper
         if (activeWallpaper != null) {
             Image(
@@ -351,8 +491,12 @@ private fun ProstoContent(
                                 blockedRects["workspace-$index"] = rect
                             }
                             .pointerInput(index, workspacePackages) {
+                                var pressStart = Offset.Zero
+                                var movedFar = false
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = { start ->
+                                        pressStart = start
+                                        movedFar = false
                                         if (app != null || isFolder) {
                                             draggingIndex = index
                                             dropTargetIndex = null
@@ -363,6 +507,7 @@ private fun ProstoContent(
                                     onDrag = { change, _ ->
                                         if (draggingIndex != null) {
                                             change.consume()
+                                            if ((change.position - pressStart).getDistance() > 24f) movedFar = true
                                             val rect = slotRects[index]
                                             if (rect != null) {
                                                 dragPoint = Offset(rect.left + change.position.x, rect.top + change.position.y)
@@ -376,6 +521,8 @@ private fun ProstoContent(
                                         val from = draggingIndex
                                         val target = dropTargetIndex
                                         if (from != null && target != null) moveApp(from, target)
+                                        // Долгое нажатие на папку без перетаскивания — меню действий.
+                                        if (from != null && isFolder && !movedFar) folderMenuKey = pkg
                                         draggingIndex = null
                                         dropTargetIndex = null
                                     },
@@ -386,7 +533,7 @@ private fun ProstoContent(
                                 )
                             }
                             .clickable(enabled = (app != null || isFolder) && draggingIndex == null) {
-                                if (isFolder) openedFolder = pkg else app?.let { launchApp(context, it.packageName) }
+                                if (isFolder) openFolder(pkg) else app?.let { launchApp(context, it.packageName) }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -414,7 +561,10 @@ private fun ProstoContent(
                                     }
                                 }
                                 Spacer(Modifier.height(4.dp))
-                                Text("Папка", fontSize = 11.sp, maxLines = 1, color = Color.White)
+                                Text(
+                                    folderNames[pkg] ?: "Папка", fontSize = 11.sp, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, color = Color.White
+                                )
                             }
                         } else if (app != null) {
                             Column(
@@ -464,6 +614,8 @@ private fun ProstoContent(
                 DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
             }
+        }
+
         }
 
         AnimatedVisibility(
@@ -655,54 +807,245 @@ private fun ProstoContent(
             }
         }
 
-        openedFolder?.let { folderKey ->
-            val members = folderContents[folderKey].orEmpty()
-            AlertDialog(
-                onDismissRequest = { openedFolder = null },
-                title = { Text("Папка") },
-                text = {
-                    Column(Modifier.heightIn(max = 420.dp).verticalScroll(androidx.compose.foundation.rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                        Text("Приложения в папке", style = MaterialTheme.typography.titleSmall)
-                        members.forEach { pkg ->
-                            val memberApp = appMap[pkg]
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text(memberApp?.label ?: pkg, modifier = Modifier.weight(1f))
-                                TextButton(onClick = {
-                                    val updatedMembers = members - pkg
-                                    val updatedFolders = if (updatedMembers.size < 2) folderContents - folderKey
-                                        else folderContents + (folderKey to updatedMembers)
-                                    persistFolders(updatedFolders)
-                                    if (updatedMembers.size < 2) {
-                                        val slots = workspacePackages.toMutableList()
-                                        val slot = slots.indexOf(folderKey)
-                                        if (slot >= 0) {
-                                            slots[slot] = updatedMembers.firstOrNull().orEmpty()
-                                            saveWorkspace(slots)
+        // ---------- Открытая папка: светлая полупрозрачная карточка по центру ----------
+        if (folderOverlayAlive) {
+            val screenHeightDp = LocalConfiguration.current.screenHeightDp
+            val folderKey = openedFolder
+            val memberApps = folderKey?.let { folderContents[it] }.orEmpty().mapNotNull { appMap[it] }
+            val cardAlpha = (0.45f + folderOpacity * 0.5f).coerceIn(0.5f, 0.95f)
+            Box(
+                Modifier.fillMaxSize()
+                    .onGloballyPositioned { overlayCenter = Offset(it.size.width / 2f, it.size.height / 2f) }
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                        folderVisible = false
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                // Затемнение фона плавно проявляется вместе с размытием.
+                Box(
+                    Modifier.matchParentSize()
+                        .graphicsLayer { alpha = folderProgress.value.coerceIn(0f, 1f) }
+                        .background(Color.Black.copy(alpha = 0.28f))
+                )
+                Surface(
+                    modifier = Modifier
+                        .padding(horizontal = 24.dp)
+                        .widthIn(max = 380.dp)
+                        .fillMaxWidth()
+                        .graphicsLayer {
+                            val raw = folderProgress.value
+                            val scale = 0.14f + 0.86f * raw
+                            scaleX = scale
+                            scaleY = scale
+                            if (folderOrigin.isSpecified) {
+                                translationX = (folderOrigin.x - overlayCenter.x) * (1f - raw)
+                                translationY = (folderOrigin.y - overlayCenter.y) * (1f - raw)
+                            }
+                            alpha = (raw.coerceIn(0f, 1f) * 2.2f).coerceIn(0f, 1f)
+                        }
+                        // Нажатие внутри карточки не должно закрывать папку.
+                        .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { },
+                    shape = RoundedCornerShape(32.dp),
+                    color = Color(0xFFF4EEFF).copy(alpha = cardAlpha),
+                    shadowElevation = 20.dp,
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.55f))
+                ) {
+                    Column(
+                        Modifier.padding(start = 18.dp, end = 18.dp, top = 24.dp, bottom = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Column(
+                            Modifier.fillMaxWidth()
+                                .heightIn(max = (screenHeightDp * 0.5f).dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            // Сетка по 3 иконки в ряд; последней ячейкой идёт «Добавить».
+                            val cells = memberApps.map<LauncherApp, LauncherApp?> { it } + listOf<LauncherApp?>(null)
+                            cells.chunked(3).forEach { rowCells ->
+                                Row(Modifier.fillMaxWidth()) {
+                                    rowCells.forEach { cell ->
+                                        Box(Modifier.weight(1f), contentAlignment = Alignment.TopCenter) {
+                                            if (cell != null && folderKey != null) {
+                                                FolderAppCell(
+                                                    app = cell,
+                                                    iconShapeChoice = iconShapeChoice,
+                                                    onClick = {
+                                                        folderVisible = false
+                                                        launchApp(context, cell.packageName)
+                                                    },
+                                                    onLongClick = { memberMenu = folderKey to cell.packageName }
+                                                )
+                                            } else if (folderKey != null) {
+                                                FolderAddCell { addToFolderKey = folderKey }
+                                            }
                                         }
-                                        openedFolder = null
                                     }
-                                }) { Text("Убрать") }
+                                    repeat(3 - rowCells.size) { Spacer(Modifier.weight(1f)) }
+                                }
                             }
                         }
-                        Divider()
-                        Text("Добавить приложение", style = MaterialTheme.typography.titleSmall)
-                        apps.filter { it.packageName !in folderContents.values.flatten() }.forEach { candidate ->
-                            TextButton(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = {
-                                    saveWorkspace(workspacePackages.map { if (it == candidate.packageName) "" else it })
-                                    saveDock(dockPackages.filterNot { it == candidate.packageName })
-                                    persistFolders(folderContents + (folderKey to (members + candidate.packageName)))
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            text = folderKey?.let { folderTitle(it) } ?: "Папка",
+                            color = DarkInk,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.clip(RoundedCornerShape(12.dp)).clickable(enabled = folderKey != null) {
+                                folderKey?.let {
+                                    renameText = folderNames[it].orEmpty()
+                                    renamingFolder = it
                                 }
-                            ) { Text(candidate.label, modifier = Modifier.fillMaxWidth()) }
+                            }.padding(horizontal = 14.dp, vertical = 6.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---------- Меню долгого нажатия на папку на рабочем столе ----------
+        folderMenuKey?.let { key ->
+            AlertDialog(
+                onDismissRequest = { folderMenuKey = null },
+                title = { Text(folderTitle(key)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                folderMenuKey = null
+                                openFolder(key)
+                            }
+                        ) { Text("Открыть", modifier = Modifier.fillMaxWidth()) }
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                folderMenuKey = null
+                                renameText = folderNames[key].orEmpty()
+                                renamingFolder = key
+                            }
+                        ) { Text("Переименовать", modifier = Modifier.fillMaxWidth()) }
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                folderMenuKey = null
+                                deleteFolder(key)
+                                Toast.makeText(context, "Папка удалена", Toast.LENGTH_SHORT).show()
+                            }
+                        ) {
+                            Text("Удалить папку", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { openedFolder = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { folderMenuKey = null }) { Text("Закрыть") } }
             )
         }
 
+        // ---------- Переименование папки ----------
+        renamingFolder?.let { key ->
+            val focusRequester = remember { FocusRequester() }
+            LaunchedEffect(key) { runCatching { focusRequester.requestFocus() } }
+            AlertDialog(
+                onDismissRequest = { renamingFolder = null },
+                title = { Text("Переименовать папку") },
+                text = {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { renameText = it.take(24) },
+                        singleLine = true,
+                        placeholder = { Text("Папка") },
+                        modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        renameFolder(key, renameText)
+                        renamingFolder = null
+                    }) { Text("Сохранить") }
+                },
+                dismissButton = { TextButton(onClick = { renamingFolder = null }) { Text("Отмена") } }
+            )
+        }
+
+        // ---------- Меню приложения внутри папки ----------
+        memberMenu?.let { (folderKey, pkg) ->
+            val memberApp = appMap[pkg]
+            val otherFolders = folderContents.keys.filter { it != folderKey }
+            val otherTitles = otherFolders.map { folderTitle(it) }
+            AlertDialog(
+                onDismissRequest = { memberMenu = null },
+                title = { Text(memberApp?.label ?: pkg) },
+                text = {
+                    Column(
+                        Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        TextButton(
+                            modifier = Modifier.fillMaxWidth(),
+                            onClick = {
+                                memberMenu = null
+                                val dissolved = takeOutOfFolder(folderKey, pkg, placeOnDesktop = true)
+                                if (dissolved) folderVisible = false
+                            }
+                        ) { Text("Убрать из папки", modifier = Modifier.fillMaxWidth()) }
+                        otherFolders.forEachIndexed { i, otherKey ->
+                            val title = otherTitles[i]
+                            val label = if (otherTitles.count { it == title } > 1) {
+                                "$title (${otherTitles.take(i + 1).count { it == title }})"
+                            } else title
+                            TextButton(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    memberMenu = null
+                                    val willDissolve = (folderContents[folderKey]?.size ?: 0) < 3
+                                    moveAppBetweenFolders(folderKey, pkg, otherKey)
+                                    if (willDissolve) folderVisible = false
+                                    Toast.makeText(context, "Перемещено в «$title»", Toast.LENGTH_SHORT).show()
+                                }
+                            ) { Text("Переместить в «$label»", modifier = Modifier.fillMaxWidth()) }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { memberMenu = null }) { Text("Закрыть") } }
+            )
+        }
+
+        // ---------- Добавление приложений в папку ----------
+        addToFolderKey?.let { folderKey ->
+            val inFolders = folderContents.values.flatten().toSet()
+            val candidates = apps.filter { it.packageName !in inFolders }
+            AlertDialog(
+                onDismissRequest = { addToFolderKey = null },
+                title = { Text("Добавить в папку") },
+                text = {
+                    if (candidates.isEmpty()) {
+                        Text("Все приложения уже лежат в папках")
+                    } else {
+                        LazyColumn(
+                            Modifier.heightIn(max = 380.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            lazyItems(candidates, key = { it.packageName }) { candidate ->
+                                Row(
+                                    Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                        .clickable { addAppToFolder(folderKey, candidate.packageName) }
+                                        .padding(horizontal = 6.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    AppImage(candidate, 38, iconShapeChoice)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(candidate.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { addToFolderKey = null }) { Text("Готово") } }
+            )
+        }
     }
 }
 
@@ -800,6 +1143,47 @@ private fun AppImage(app: LauncherApp, size: Int, iconShapeChoice: IconShapeChoi
         update = { it.setImageDrawable(app.icon) },
         modifier = Modifier.size(size.dp).padding(2.dp).clip(iconShape(iconShapeChoice))
     )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FolderAppCell(
+    app: LauncherApp,
+    iconShapeChoice: IconShapeChoice,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        AppImage(app, 58, iconShapeChoice)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            app.label, fontSize = 12.sp, maxLines = 2, color = DarkInk,
+            overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun FolderAddCell(onClick: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier.padding(2.dp).size(54.dp).clip(CircleShape).background(Purple.copy(alpha = 0.22f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(Icons.Default.Add, contentDescription = "Добавить приложение", tint = Purple, modifier = Modifier.size(30.dp))
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("Добавить", fontSize = 12.sp, maxLines = 1, color = DarkInk, textAlign = TextAlign.Center)
+    }
 }
 
 @Composable

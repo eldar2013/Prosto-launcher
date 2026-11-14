@@ -269,6 +269,8 @@ private fun ProstoContent(
     var settingsOpen by remember { mutableStateOf(false) }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
+    var workspaceEditMode by remember { mutableStateOf(false) }
+    var confirmDeleteWorkspacePage by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
 
     val oldHome = remember {
@@ -394,6 +396,29 @@ private fun ProstoContent(
         workspacePageCount += 1
         prefs.edit().putInt("workspace_page_count", workspacePageCount).apply()
         switchWorkspacePage(workspacePageCount - 1)
+    }
+    fun deleteCurrentWorkspacePage() {
+        if (workspacePageCount <= 1 || workspacePage == 0) return
+        val removedPage = workspacePage
+        saveWorkspaceWidgets(workspaceWidgets.filterNot { it.page == removedPage })
+        prefs.edit().remove("workspace_slots_$removedPage").apply()
+        val shiftedWidgets = workspaceWidgets.filterNot { it.page == removedPage }.map {
+            if (it.page > removedPage) it.copy(page = it.page - 1) else it
+        }
+        saveWorkspaceWidgets(shiftedWidgets)
+        for (page in removedPage + 1 until workspacePageCount) {
+            val slots = prefs.getString("workspace_slots_$page", null)
+            if (slots != null) prefs.edit().putString("workspace_slots_${page - 1}", slots).apply()
+            prefs.edit().remove("workspace_slots_$page").apply()
+        }
+        workspacePageCount = (workspacePageCount - 1).coerceAtLeast(1)
+        prefs.edit().putInt("workspace_page_count", workspacePageCount).apply()
+        workspaceEditMode = false
+        workspacePage = (removedPage - 1).coerceAtLeast(0)
+        val saved = prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)
+            ?.split("|").orEmpty().take(20)
+        workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+        prefs.edit().putInt("workspace_current_page", workspacePage).apply()
     }
     fun addToWorkspace(pkg: String) {
         if (pkg in workspacePackages) {
@@ -597,7 +622,7 @@ private fun ProstoContent(
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
                         (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
                     }
-                    if (!blocked && !drawerOpen && !folderVisible) quickMenuOpen = true
+                    if (!blocked && !drawerOpen && !folderVisible) { workspaceEditMode = true; quickMenuOpen = false }
                 }
             )
         }
@@ -688,6 +713,22 @@ private fun ProstoContent(
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
                     Box(
                         Modifier.fillMaxWidth().height(86.dp)
+                            .graphicsLayer {
+                                val shrinking = if (workspaceEditMode) 0.82f else 1f
+                                scaleX = shrinking
+                                scaleY = shrinking
+                                if (workspaceEditMode) {
+                                    val density = this.density
+                                    val cellCenterX = ((index % 4) + 0.5f) * gridCellPitch * density
+                                    val cellCenterY = ((index / 4) + 0.5f) * 98f * density
+                                    translationX = (configuration.screenWidthDp * density / 2f - cellCenterX) * 0.10f
+                                    translationY = (configuration.screenHeightDp * density / 2f - cellCenterY) * 0.08f
+                                } else {
+                                    translationX = 0f
+                                    translationY = 0f
+                                }
+                                alpha = if (workspaceEditMode) 0.92f else 1f
+                            }
                             .onGloballyPositioned { coordinates ->
                                 val rect = coordinates.boundsInRoot()
                                 slotRects[index] = rect
@@ -841,7 +882,7 @@ private fun ProstoContent(
                         ) {
                             Column(Modifier.fillMaxSize()) {
                                 Row(
-                                    Modifier.fillMaxWidth().height(27.dp).background(Purple.copy(alpha = 0.35f))
+                                    Modifier.fillMaxWidth().height(8.dp).background(Color.Transparent)
                                         .combinedClickable(onClick = {}, onLongClick = { selectedWorkspaceWidget = widget.id })
                                         .pointerInput(widget.id) {
                                             detectDragGestures(
@@ -867,11 +908,10 @@ private fun ProstoContent(
                                         },
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Виджет",
-                                        color = Color.White, fontSize = 10.sp, modifier = Modifier.weight(1f).padding(start = 8.dp)
-                                            .combinedClickable(onClick = {}, onLongClick = { selectedWorkspaceWidget = widget.id }))
-                                    if (resizingWidgetId == widget.id) Text("Готово", color = Color.White, fontSize = 10.sp,
-                                        modifier = Modifier.clickable { resizingWidgetId = null }.padding(horizontal = 6.dp))
+                                    Spacer(Modifier.weight(1f))
+                                    if (resizingWidgetId == widget.id) TextButton(onClick = { resizingWidgetId = null }) {
+                                        Text("Готово", color = Color.White, fontSize = 10.sp)
+                                    }
 
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
@@ -906,7 +946,7 @@ private fun ProstoContent(
                                         }
                                     }
                                 }
-                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.End).size(20.dp).background(Purple.copy(alpha = 0.8f))
+                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.BottomEnd).padding(4.dp).size(18.dp).clip(CircleShape).background(Color.White)
                                     .pointerInput(widget.id) {
                                         detectDragGestures(
                                             onDragStart = { draggingWidget = true },
@@ -1153,27 +1193,63 @@ private fun ProstoContent(
             )
         }
 
-        if (quickMenuOpen) {
-            Dialog(onDismissRequest = { quickMenuOpen = false }) {
-                Surface(
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    tonalElevation = 8.dp
-                ) {
-                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Prosto", style = MaterialTheme.typography.titleLarge)
-                        FilledTonalButton(
-                            onClick = { quickMenuOpen = false; widgetSourceOpen = true },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Добавить виджет") }
-                        FilledTonalButton(
-                            onClick = { quickMenuOpen = false; settingsOpen = true },
-                            modifier = Modifier.fillMaxWidth()
-                        ) { Text("Настройки лаунчера") }
+        AnimatedVisibility(
+            visible = workspaceEditMode,
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 112.dp),
+            enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it / 2 }),
+            exit = fadeOut(tween(120)) + slideOutVertically(targetOffsetY = { it / 2 })
+        ) {
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp))
+                    .background(Color(0xDD242333)).padding(horizontal = 8.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
+                    workspaceEditMode = false
+                    widgetSourceOpen = true
+                }) {
+                    Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
+                        Box(contentAlignment = Alignment.Center) { Text("▦", color = Color.White, fontSize = 28.sp) }
                     }
+                    Text("Виджеты", color = Color.White, fontSize = 12.sp, maxLines = 1)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
+                    addWorkspacePage()
+                    workspaceEditMode = false
+                }) {
+                    Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
+                        Box(contentAlignment = Alignment.Center) { Text("+", color = Color.White, fontSize = 34.sp) }
+                    }
+                    Text("Новый рабочий стол", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
+                    workspaceEditMode = false
+                    settingsOpen = true
+                }) {
+                    Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
+                        Box(contentAlignment = Alignment.Center) { Text("⚙", color = Color.White, fontSize = 28.sp) }
+                    }
+                    Text("Настройки лаунчера", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
+        if (workspaceEditMode && workspacePage > 0) {
+            TextButton(
+                onClick = { confirmDeleteWorkspacePage = true },
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = 18.dp)
+            ) { Text("Удалить этот экран", color = Color.White) }
+        }
+        if (confirmDeleteWorkspacePage) {
+            AlertDialog(
+                onDismissRequest = { confirmDeleteWorkspacePage = false },
+                title = { Text("Удалить рабочий стол?") },
+                text = { Text("Приложения и виджеты с этого рабочего стола будут удалены с него.") },
+                confirmButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false; deleteCurrentWorkspacePage() }) { Text("Удалить") } },
+                dismissButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false }) { Text("Отмена") } }
+            )
+        }
+
 
         if (widgetSourceOpen) {
             AlertDialog(

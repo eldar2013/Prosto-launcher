@@ -1223,25 +1223,6 @@ private fun AnalogClockWidget(modifier: Modifier = Modifier) {
 
 private fun queryLauncherApps(context: android.content.Context): List<LauncherApp> {
     val pm = context.packageManager
-    val appWidgetManager = remember { AppWidgetManager.getInstance(context) }
-    val appWidgetHost = remember { AppWidgetHost(context, 2048) }
-    var hostedWidgetIds by remember {
-        mutableStateOf(prefs.getString("hosted_widget_ids", "").orEmpty()
-            .split(",").mapNotNull { it.toIntOrNull() })
-    }
-    DisposableEffect(appWidgetHost) {
-        runCatching { appWidgetHost.startListening() }
-        onDispose { runCatching { appWidgetHost.stopListening() } }
-    }
-    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
-        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
-            hostedWidgetIds = hostedWidgetIds + id
-            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-        } else if (id > 0) {
-            appWidgetHost.deleteAppWidgetId(id)
-        }
-    }
     return runCatching {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val entries = if (Build.VERSION.SDK_INT >= 33) {

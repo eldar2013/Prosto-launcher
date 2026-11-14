@@ -7,6 +7,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProviderInfo
 import android.widget.ImageView
 import android.widget.Toast
 import android.util.Base64
@@ -155,10 +158,31 @@ private fun ProstoContent(
 ) {
     val context = LocalContext.current
     val pm = context.packageManager
+    val appWidgetManager = remember { AppWidgetManager.getInstance(context) }
+    val appWidgetHost = remember { AppWidgetHost(context, 2048) }
+    var hostedWidgetIds by remember {
+        mutableStateOf(prefs.getString("hosted_widget_ids", "").orEmpty()
+            .split(",").mapNotNull { it.toIntOrNull() })
+    }
+    DisposableEffect(appWidgetHost) {
+        runCatching { appWidgetHost.startListening() }
+        onDispose { runCatching { appWidgetHost.stopListening() } }
+    }
+    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
+            hostedWidgetIds = hostedWidgetIds + id
+            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+        } else if (id > 0) {
+            appWidgetHost.deleteAppWidgetId(id)
+        }
+    }
     var apps by remember { mutableStateOf(emptyList<LauncherApp>()) }
     var search by remember { mutableStateOf("") }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var widgetsOpen by remember { mutableStateOf(false) }
+    var quickMenuOpen by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
 
     val oldHome = remember {
@@ -437,11 +461,31 @@ private fun ProstoContent(
     BackHandler(enabled = folderVisible) { folderVisible = false }
 
     Box(
-        Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, folderVisible, blockedRects.size) {
-            detectTapGestures(onLongPress = { point ->
-                val blocked = blockedRects.values.any { it.contains(point) }
-                if (!blocked && !drawerOpen && !folderVisible) settingsOpen = true
-            })
+        Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages) {
+            detectTapGestures(
+                onTap = { point ->
+                    val blocked = blockedRects.any { (key, rect) ->
+                        val occupiedWorkspace = key.startsWith("workspace-") &&
+                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
+                        val occupiedDock = key.startsWith("dock-") &&
+                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                    }
+                    if (!blocked && !drawerOpen && !folderVisible && !settingsOpen && !widgetsOpen) {
+                        quickMenuOpen = true
+                    }
+                },
+                onLongPress = { point ->
+                    val blocked = blockedRects.any { (key, rect) ->
+                        val occupiedWorkspace = key.startsWith("workspace-") &&
+                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
+                        val occupiedDock = key.startsWith("dock-") &&
+                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                    }
+                    if (!blocked && !drawerOpen && !folderVisible) quickMenuOpen = true
+                }
+            )
         }
     ) {
         Box(
@@ -467,17 +511,7 @@ private fun ProstoContent(
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (dark) 0.12f else 0.03f)))
 
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Spacer(Modifier.height(56.dp))
-            Text(
-                now.format(DateTimeFormatter.ofPattern("HH:mm")),
-                fontSize = 72.sp, lineHeight = 78.sp, fontWeight = FontWeight.Light, color = Color.White
-            )
-            Text(
-                now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ru")))
-                    .replaceFirstChar { it.titlecase(Locale("ru")) },
-                style = MaterialTheme.typography.titleMedium, color = Color.White.copy(alpha = 0.88f)
-            )
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(24.dp))
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
@@ -725,7 +759,7 @@ private fun ProstoContent(
                             onClick = {
                                 selectedApp = null
                                 runCatching {
-                                    uninstallLauncher.launch(Intent(Intent.ACTION_DELETE, Uri.parse("package:${app.packageName}")))
+                                    uninstallLauncher.launch(Intent(Intent.ACTION_UNINSTALL_PACKAGE, Uri.parse("package:${app.packageName}")).putExtra(Intent.EXTRA_RETURN_RESULT, true))
                                 }.onFailure {
                                     Toast.makeText(context, "Не удалось открыть удаление", Toast.LENGTH_SHORT).show()
                                 }
@@ -739,6 +773,95 @@ private fun ProstoContent(
             )
         }
 
+        if (quickMenuOpen) {
+            Dialog(onDismissRequest = { quickMenuOpen = false }) {
+                Surface(
+                    shape = RoundedCornerShape(24.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    tonalElevation = 8.dp
+                ) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Prosto", style = MaterialTheme.typography.titleLarge)
+                        FilledTonalButton(
+                            onClick = { quickMenuOpen = false; widgetsOpen = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Виджеты") }
+                        FilledTonalButton(
+                            onClick = { quickMenuOpen = false; settingsOpen = true },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Настройки лаунчера") }
+                    }
+                }
+            }
+        }
+
+        if (widgetsOpen) {
+            Dialog(
+                onDismissRequest = { widgetsOpen = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+            ) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Виджеты", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { widgetsOpen = false }) { Text("Готово") }
+                        }
+                        Text("Часы", style = MaterialTheme.typography.titleMedium, color = Purple)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            DigitalClockWidget(now, Modifier.weight(1f))
+                            AnalogClockWidget(Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(18.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Другие виджеты Android", style = MaterialTheme.typography.titleMedium,
+                                modifier = Modifier.weight(1f))
+                            FilledTonalButton(onClick = {
+                                val id = appWidgetHost.allocateAppWidgetId()
+                                val pick = Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).apply {
+                                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                                }
+                                runCatching { widgetPicker.launch(pick) }
+                                    .onFailure { appWidgetHost.deleteAppWidgetId(id) }
+                            }) { Text("Добавить") }
+                        }
+                        Text("Выбери виджет из приложений, установленных на устройстве.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            lazyItems(hostedWidgetIds, key = { it }) { widgetId ->
+                                val provider = appWidgetManager.getAppWidgetInfo(widgetId)
+                                if (provider != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(18.dp),
+                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                    ) {
+                                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                                            Text(provider.loadLabel(pm), style = MaterialTheme.typography.labelLarge)
+                                            AndroidView(
+                                                factory = { appWidgetHost.createView(it, widgetId, provider).apply {
+                                                    setAppWidget(widgetId, provider)
+                                                } },
+                                                modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 320.dp)
+                                            )
+                                            TextButton(onClick = {
+                                                appWidgetHost.deleteAppWidgetId(widgetId)
+                                                hostedWidgetIds = hostedWidgetIds - widgetId
+                                                prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                                            }) { Text("Удалить виджет", color = MaterialTheme.colorScheme.error) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if (settingsOpen) {
             Dialog(
                 onDismissRequest = { settingsOpen = false },
@@ -747,7 +870,7 @@ private fun ProstoContent(
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Настройки главного экрана", style = MaterialTheme.typography.headlineSmall,
+                            Text("Настройки лаунчера", style = MaterialTheme.typography.headlineSmall,
                                 modifier = Modifier.weight(1f))
                             TextButton(onClick = { settingsOpen = false }) { Text("Готово") }
                         }
@@ -1059,8 +1182,66 @@ private fun ProstoContent(
     }
 }
 
+@Composable
+private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.height(150.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = Color(0xFF171326),
+        border = BorderStroke(1.dp, Purple.copy(alpha = 0.8f))
+    ) {
+        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 38.sp,
+                fontWeight = FontWeight.Bold, color = Lavender)
+            Text(now.format(DateTimeFormatter.ofPattern("d MMMM", Locale("ru"))),
+                color = Lavender, fontSize = 13.sp)
+            Text("C6", color = Lavender.copy(alpha = 0.75f), fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun AnalogClockWidget(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.height(150.dp),
+        shape = CircleShape,
+        color = Color(0xFF171326),
+        border = BorderStroke(2.dp, Purple)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text("12\n\n9                         3\n\n6", color = Lavender,
+                textAlign = TextAlign.Center, fontSize = 16.sp, lineHeight = 18.sp)
+            Box(Modifier.width(3.dp).height(48.dp).offset(y = (-13).dp)
+                .clip(CircleShape).background(Lavender))
+            Box(Modifier.width(3.dp).height(35.dp).offset(x = 13.dp, y = 7.dp)
+                .graphicsLayer { rotationZ = 55f }.clip(CircleShape).background(Purple))
+            Box(Modifier.size(10.dp).clip(CircleShape).background(Purple))
+        }
+    }
+}
+
 private fun queryLauncherApps(context: android.content.Context): List<LauncherApp> {
     val pm = context.packageManager
+    val appWidgetManager = remember { AppWidgetManager.getInstance(context) }
+    val appWidgetHost = remember { AppWidgetHost(context, 2048) }
+    var hostedWidgetIds by remember {
+        mutableStateOf(prefs.getString("hosted_widget_ids", "").orEmpty()
+            .split(",").mapNotNull { it.toIntOrNull() })
+    }
+    DisposableEffect(appWidgetHost) {
+        runCatching { appWidgetHost.startListening() }
+        onDispose { runCatching { appWidgetHost.stopListening() } }
+    }
+    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
+            hostedWidgetIds = hostedWidgetIds + id
+            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+        } else if (id > 0) {
+            appWidgetHost.deleteAppWidgetId(id)
+        }
+    }
     return runCatching {
         val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val entries = if (Build.VERSION.SDK_INT >= 33) {

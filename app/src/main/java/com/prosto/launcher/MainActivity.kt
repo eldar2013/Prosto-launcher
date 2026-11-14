@@ -760,8 +760,9 @@ private fun ProstoContent(
                                 selectedApp = null
                                 runCatching {
                                     uninstallLauncher.launch(
-                                        Intent(Intent.ACTION_DELETE).apply {
+                                        Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
                                             data = Uri.parse("package:${app.packageName}")
+                                            putExtra(Intent.EXTRA_RETURN_RESULT, true)
                                         }
                                     )
                                 }.onFailure {

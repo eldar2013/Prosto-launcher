@@ -36,6 +36,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -89,6 +90,15 @@ import kotlinx.coroutines.delay
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private data class WorkspaceWidget(
+    val id: Int,
+    val type: String,
+    val x: Float = 8f,
+    val y: Float = 8f,
+    val width: Float = 160f,
+    val height: Float = 112f
+)
 
 private data class LauncherApp(
     val label: String,
@@ -164,6 +174,32 @@ private fun ProstoContent(
         mutableStateOf(prefs.getString("hosted_widget_ids", "").orEmpty()
             .split(",").mapNotNull { it.toIntOrNull() })
     }
+    fun readWorkspaceWidgets(): List<WorkspaceWidget> = prefs.getStringSet("workspace_widgets", emptySet())
+        ?.mapNotNull { entry ->
+            val parts = entry.split(",")
+            if (parts.size == 6) runCatching {
+                WorkspaceWidget(parts[0].toInt(), parts[1], parts[2].toFloat(), parts[3].toFloat(), parts[4].toFloat(), parts[5].toFloat())
+            }.getOrNull() else null
+        }.orEmpty()
+    var workspaceWidgets by remember { mutableStateOf(readWorkspaceWidgets()) }
+    fun saveWorkspaceWidgets(items: List<WorkspaceWidget>) {
+        workspaceWidgets = items
+        prefs.edit().putStringSet("workspace_widgets", items.map {
+            "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height}"
+        }.toSet()).apply()
+    }
+    fun addOwnWidget(type: String) {
+        val own = workspaceWidgets.filter { it.type != "android" }
+        val id = (own.minOfOrNull { it.id } ?: 0) - 1
+        val index = own.size
+        saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+            id = id, type = type,
+            x = if (index % 2 == 0) 8f else 164f,
+            y = 8f + (index / 2) * 108f,
+            width = 150f
+        ))
+    }
+    var widgetSourceOpen by remember { mutableStateOf(false) }
     DisposableEffect(appWidgetHost) {
         runCatching { appWidgetHost.startListening() }
         onDispose { runCatching { appWidgetHost.stopListening() } }
@@ -173,6 +209,14 @@ private fun ProstoContent(
         if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
             hostedWidgetIds = hostedWidgetIds + id
             prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+            if (workspaceWidgets.none { it.id == id }) {
+                val provider = appWidgetManager.getAppWidgetInfo(id)
+                saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+                    id, "android",
+                    width = maxOf(150f, provider?.minWidth?.toFloat() ?: 150f),
+                    height = maxOf(100f, provider?.minHeight?.toFloat() ?: 100f)
+                ))
+            }
         } else if (id > 0) {
             appWidgetHost.deleteAppWidgetId(id)
         }
@@ -471,9 +515,6 @@ private fun ProstoContent(
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
                         (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
                     }
-                    if (!blocked && !drawerOpen && !folderVisible && !settingsOpen && !widgetsOpen) {
-                        quickMenuOpen = true
-                    }
                 },
                 onLongPress = { point ->
                     val blocked = blockedRects.any { (key, rect) ->
@@ -512,6 +553,107 @@ private fun ProstoContent(
 
         Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Spacer(Modifier.height(24.dp))
+
+            if (workspaceWidgets.isNotEmpty()) {
+                Box(Modifier.fillMaxWidth().height(230.dp)) {
+                    workspaceWidgets.forEach { widget ->
+                        val latestWorkspaceWidgets = rememberUpdatedState(workspaceWidgets)
+                        val widgetProvider = if (widget.type == "android") appWidgetManager.getAppWidgetInfo(widget.id) else null
+                        val widgetModifier = Modifier
+                            .offset(x = widget.x.dp, y = widget.y.dp)
+                            .width(widget.width.dp).height(widget.height.dp)
+                        Surface(
+                            modifier = widgetModifier,
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF171326).copy(alpha = 0.94f),
+                            border = BorderStroke(1.dp, Purple.copy(alpha = 0.8f))
+                        ) {
+                            Column(Modifier.fillMaxSize()) {
+                                Row(
+                                    Modifier.fillMaxWidth().height(27.dp).background(Purple.copy(alpha = 0.35f))
+                                        .pointerInput(widget.id) {
+                                            detectDragGestures { change, drag ->
+                                                change.consume()
+                                                val density = this.density
+                                                val updated = latestWorkspaceWidgets.value.map { current ->
+                                                    if (current.id == widget.id) current.copy(
+                                                        x = (current.x + drag.x / density).coerceIn(0f, 180f),
+                                                        y = (current.y + drag.y / density).coerceIn(0f, 190f)
+                                                    ) else current
+                                                }
+                                                saveWorkspaceWidgets(updated)
+                                            }
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(if (widget.type == "android") "Виджет Android" else "Виджет Prosto",
+                                        color = Color.White, fontSize = 10.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                                    Text("×", color = Color.White, modifier = Modifier.clickable {
+                                        if (widget.type == "android") {
+                                            appWidgetHost.deleteAppWidgetId(widget.id)
+                                            hostedWidgetIds = hostedWidgetIds - widget.id
+                                            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                                        }
+                                        saveWorkspaceWidgets(workspaceWidgets.filterNot { it.id == widget.id })
+                                    }.padding(horizontal = 8.dp))
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
+                                    when (widget.type) {
+                                        "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
+                                        "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
+                                        "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ru"))),
+                                                    color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
+                                            }
+                                        }
+                                        "android" -> {
+                                            val provider = widgetProvider
+                                            if (provider != null) AndroidView(
+                                                factory = { appWidgetHost.createView(it, widget.id, provider).apply { setAppWidget(widget.id, provider) } },
+                                                update = { view ->
+                                                    view.setAppWidget(widget.id, provider)
+                                                    appWidgetManager.updateAppWidgetOptions(widget.id, Bundle().apply {
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, widget.width.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widget.width.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, widget.height.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, widget.height.toInt())
+                                                    })
+                                                },
+                                                modifier = Modifier.fillMaxSize()
+                                            ) else Text("Виджет недоступен", color = Color.White)
+                                        }
+                                    }
+                                }
+                                Box(Modifier.align(Alignment.End).size(20.dp).background(Purple.copy(alpha = 0.8f))
+                                    .pointerInput(widget.id) {
+                                        detectDragGestures { change, drag ->
+                                            change.consume()
+                                            val density = this.density
+                                            saveWorkspaceWidgets(latestWorkspaceWidgets.value.map { current ->
+                                                if (current.id == widget.id) {
+                                                    val resizeMode = widgetProvider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_BOTH
+                                                    val canResizeWidth = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL) != 0
+                                                    val canResizeHeight = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL) != 0
+                                                    current.copy(
+                                                        width = if (canResizeWidth) (current.width + drag.x / density).coerceIn(
+                                                            maxOf(100f, widgetProvider?.minWidth?.toFloat() ?: 100f), 300f
+                                                        ) else current.width,
+                                                        height = if (canResizeHeight) (current.height + drag.y / density).coerceIn(
+                                                            maxOf(75f, widgetProvider?.minHeight?.toFloat() ?: 75f), 190f
+                                                        ) else current.height
+                                                    )
+                                                } else current
+                                            })
+                                        }
+                                    }, contentAlignment = Alignment.Center) {
+                                    Text("↘", color = Color.White, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
@@ -788,9 +930,9 @@ private fun ProstoContent(
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Prosto", style = MaterialTheme.typography.titleLarge)
                         FilledTonalButton(
-                            onClick = { quickMenuOpen = false; widgetsOpen = true },
+                            onClick = { quickMenuOpen = false; widgetSourceOpen = true },
                             modifier = Modifier.fillMaxWidth()
-                        ) { Text("Виджеты") }
+                        ) { Text("Добавить виджет") }
                         FilledTonalButton(
                             onClick = { quickMenuOpen = false; settingsOpen = true },
                             modifier = Modifier.fillMaxWidth()
@@ -798,6 +940,32 @@ private fun ProstoContent(
                     }
                 }
             }
+        }
+
+        if (widgetSourceOpen) {
+            AlertDialog(
+                onDismissRequest = { widgetSourceOpen = false },
+                title = { Text("Добавить виджет") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Виджеты Prosto Launcher", color = Purple, fontWeight = FontWeight.Bold)
+                        listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата").forEach { (type, label) ->
+                            Text(label, modifier = Modifier.fillMaxWidth().clickable {
+                                addOwnWidget(type)
+                                widgetSourceOpen = false
+                            }.padding(10.dp))
+                        }
+                        Divider()
+                        Text("Виджеты Android", modifier = Modifier.fillMaxWidth().clickable {
+                            widgetSourceOpen = false
+                            val id = appWidgetHost.allocateAppWidgetId()
+                            val pick = Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                            runCatching { widgetPicker.launch(pick) }.onFailure { appWidgetHost.deleteAppWidgetId(id) }
+                        }.padding(10.dp))
+                    }
+                },
+                confirmButton = { TextButton(onClick = { widgetSourceOpen = false }) { Text("Закрыть") } }
+            )
         }
 
         if (widgetsOpen) {
@@ -811,10 +979,11 @@ private fun ProstoContent(
                             Text("Виджеты", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                             TextButton(onClick = { widgetsOpen = false }) { Text("Готово") }
                         }
-                        Text("Часы", style = MaterialTheme.typography.titleMedium, color = Purple)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            DigitalClockWidget(now, Modifier.weight(1f))
-                            AnalogClockWidget(Modifier.weight(1f))
+                        Text("Виджеты Prosto Launcher", style = MaterialTheme.typography.titleMedium, color = Purple)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "digital")); widgetsOpen = false }) { Text("Часы") }
+                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "analog")); widgetsOpen = false }) { Text("Аналоговые") }
+                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "date")); widgetsOpen = false }) { Text("Дата") }
                         }
                         Spacer(Modifier.height(18.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1190,7 +1359,7 @@ private fun ProstoContent(
 @Composable
 private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier.height(150.dp),
+        modifier = modifier,
         shape = RoundedCornerShape(28.dp),
         color = Color(0xFF171326),
         border = BorderStroke(1.dp, Purple.copy(alpha = 0.8f))
@@ -1209,7 +1378,7 @@ private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier
 @Composable
 private fun AnalogClockWidget(modifier: Modifier = Modifier) {
     Surface(
-        modifier = modifier.height(150.dp),
+        modifier = modifier,
         shape = CircleShape,
         color = Color(0xFF171326),
         border = BorderStroke(2.dp, Purple)

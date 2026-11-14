@@ -11,6 +11,7 @@ import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
 import android.util.Base64
 import androidx.activity.ComponentActivity
@@ -37,6 +38,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -626,7 +628,7 @@ private fun ProstoContent(
             Modifier.fillMaxSize().padding(horizontal = 16.dp)
                 .pointerInput(workspacePage, workspacePageCount, draggingIndex, draggingWidget) {
                     var horizontalTravel = 0f
-                    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                    detectHorizontalDragGestures(
                         onHorizontalDrag = { change, amount ->
                             change.consume()
                             horizontalTravel += amount

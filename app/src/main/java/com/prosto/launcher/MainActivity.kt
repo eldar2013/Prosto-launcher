@@ -1686,6 +1686,7 @@ private fun WidgetResizeKnob(
     )
 }
 
+@Composable
 private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,

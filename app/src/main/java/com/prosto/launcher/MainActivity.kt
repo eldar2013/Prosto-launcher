@@ -75,6 +75,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -408,6 +409,12 @@ private fun ProstoContent(
         }
     }
 
+    // Запуск приложения с анимацией «из иконки» (как на iPhone): система увеличивает окно приложения из точки, где лежала иконка.
+    val rootView = LocalView.current
+    fun launch(pkg: String, bounds: Rect?) {
+        launchApp(context, pkg, rootView, bounds?.let { iconRectFor(it, rootView.resources.displayMetrics.density) })
+    }
+
     // Открывает папку «из иконки»: запоминаем, где иконка папки лежит на экране.
     fun openFolder(key: String) {
         val slot = workspacePackages.indexOf(key)
@@ -533,7 +540,7 @@ private fun ProstoContent(
                                 )
                             }
                             .clickable(enabled = (app != null || isFolder) && draggingIndex == null) {
-                                if (isFolder) openFolder(pkg) else app?.let { launchApp(context, it.packageName) }
+                                if (isFolder) openFolder(pkg) else app?.let { launch(it.packageName, slotRects[index]) }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -600,8 +607,8 @@ private fun ProstoContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                DockSlot(dockApps.getOrNull(0), "dock-left-1", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
-                DockSlot(dockApps.getOrNull(1), "dock-left-2", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
+                DockSlot(dockApps.getOrNull(0), "dock-left-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(1), "dock-left-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 Surface(
                     modifier = Modifier.size(54.dp).onGloballyPositioned { blockedRects["drawer-button"] = it.boundsInRoot() }
                         .clickable { drawerOpen = true },
@@ -611,8 +618,8 @@ private fun ProstoContent(
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Все приложения", tint = DarkInk, modifier = Modifier.size(34.dp))
                     }
                 }
-                DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
-                DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { launchApp(context, it.packageName) }
+                DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
             }
         }
 
@@ -652,9 +659,12 @@ private fun ProstoContent(
                     horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(filteredApps, key = { it.packageName }) { app ->
+                        val cellBounds = remember { arrayOfNulls<Rect>(1) }
                         Column(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).combinedClickable(
-                                onClick = { launchApp(context, app.packageName) },
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                                .onGloballyPositioned { cellBounds[0] = it.boundsInRoot() }
+                                .combinedClickable(
+                                onClick = { launch(app.packageName, cellBounds[0]) },
                                 onLongClick = { selectedApp = app }
                             ).padding(vertical = 5.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
@@ -870,9 +880,9 @@ private fun ProstoContent(
                                                 FolderAppCell(
                                                     app = cell,
                                                     iconShapeChoice = iconShapeChoice,
-                                                    onClick = {
+                                                    onClick = { bounds ->
                                                         folderVisible = false
-                                                        launchApp(context, cell.packageName)
+                                                        launch(cell.packageName, bounds)
                                                     },
                                                     onLongClick = { memberMenu = folderKey to cell.packageName }
                                                 )
@@ -1125,11 +1135,11 @@ private fun DockSlot(
     key: String,
     blockedRects: MutableMap<String, Rect>,
     iconShapeChoice: IconShapeChoice,
-    onClick: (LauncherApp) -> Unit
+    onClick: (LauncherApp, Rect?) -> Unit
 ) {
     Box(Modifier.size(48.dp).onGloballyPositioned { blockedRects[key] = it.boundsInRoot() }, contentAlignment = Alignment.Center) {
         if (app != null) {
-            Box(Modifier.fillMaxSize().clickable { onClick(app) }, contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().clickable { onClick(app, blockedRects[key]) }, contentAlignment = Alignment.Center) {
                 AppImage(app, 46, iconShapeChoice)
             }
         }
@@ -1150,12 +1160,14 @@ private fun AppImage(app: LauncherApp, size: Int, iconShapeChoice: IconShapeChoi
 private fun FolderAppCell(
     app: LauncherApp,
     iconShapeChoice: IconShapeChoice,
-    onClick: () -> Unit,
+    onClick: (Rect?) -> Unit,
     onLongClick: () -> Unit
 ) {
+    val bounds = remember { arrayOfNulls<Rect>(1) }
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .onGloballyPositioned { bounds[0] = it.boundsInRoot() }
+            .combinedClickable(onClick = { onClick(bounds[0]) }, onLongClick = onLongClick)
             .padding(vertical = 4.dp, horizontal = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -1199,8 +1211,30 @@ private fun ThemeRow(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
-private fun launchApp(context: android.content.Context, packageName: String) {
+// Квадрат вокруг иконки: от него система «разворачивает» окно запускаемого приложения.
+private fun iconRectFor(bounds: Rect, density: Float): Rect {
+    val side = minOf(bounds.width, 56f * density)
+    val topShift = if (bounds.height > side * 1.3f) 6f * density else 0f
+    return Rect(Offset(bounds.center.x, bounds.top + topShift + side / 2f), side / 2f)
+}
+
+private fun launchApp(
+    context: android.content.Context,
+    packageName: String,
+    view: android.view.View? = null,
+    from: Rect? = null
+) {
     runCatching {
-        context.packageManager.getLaunchIntentForPackage(packageName)?.let(context::startActivity)
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return@runCatching
+        val options = if (view != null && from != null) {
+            android.app.ActivityOptions.makeScaleUpAnimation(
+                view,
+                from.left.toInt(),
+                from.top.toInt(),
+                from.width.toInt().coerceAtLeast(1),
+                from.height.toInt().coerceAtLeast(1)
+            ).toBundle()
+        } else null
+        context.startActivity(intent, options)
     }
 }

@@ -870,11 +870,54 @@ private fun ProstoContent(
                         val widgetModifier = Modifier
                             .offset(x = widget.x.dp, y = (widget.y + 10f).dp)
                             .width(widget.width.dp).height(widget.height.dp)
+                        val resizeBy: (String, Float, Float) -> Unit = { edge, dx, dy ->
+                            val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
+                            if (current != null) {
+                                val mode = widgetProvider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_BOTH
+                                val canW = widget.type != "android" || (mode and AppWidgetProviderInfo.RESIZE_HORIZONTAL) != 0
+                                val canH = widget.type != "android" || (mode and AppWidgetProviderInfo.RESIZE_VERTICAL) != 0
+                                val minW = maxOf(gridCellPitch - 4f,
+                                    (widgetProvider?.minResizeWidth?.takeIf { it > 0 } ?: widgetProvider?.minWidth ?: (gridCellPitch - 4f).toInt()).toFloat())
+                                val minH = maxOf(86f,
+                                    (widgetProvider?.minResizeHeight?.takeIf { it > 0 } ?: widgetProvider?.minHeight ?: 86).toFloat())
+                                var x = current.x
+                                var y = current.y
+                                var w = current.width
+                                var h = current.height
+                                when (edge) {
+                                    "left" -> if (canW) {
+                                        val wanted = (w - dx).coerceAtLeast(minW)
+                                        val snapped = (((kotlin.math.round((wanted + 4f) / gridCellPitch).coerceIn(1f, 4f) * gridCellPitch) - 4f).coerceAtLeast(minW))
+                                        x = (current.x + current.width - snapped).coerceAtLeast(0f)
+                                        w = current.x + current.width - x
+                                    }
+                                    "right" -> if (canW) {
+                                        val wanted = (w + dx).coerceAtLeast(minW)
+                                        w = (((kotlin.math.round((wanted + 4f) / gridCellPitch).coerceIn(1f, 4f) * gridCellPitch) - 4f).coerceAtLeast(minW))
+                                        w = w.coerceAtMost(gridCellPitch * 4f - 4f - x)
+                                    }
+                                    "top" -> if (canH) {
+                                        val wanted = (h - dy).coerceAtLeast(minH)
+                                        val snapped = ((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minH)
+                                        y = (current.y + current.height - snapped).coerceAtLeast(0f)
+                                        h = current.y + current.height - y
+                                    }
+                                    "bottom" -> if (canH) {
+                                        val wanted = (h + dy).coerceAtLeast(minH)
+                                        h = (((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minH))
+                                        h = h.coerceAtMost(490f - y)
+                                    }
+                                }
+                                val candidate = current.copy(x = x, y = y, width = w, height = h)
+                                val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
+                                if (others.none { widgetsOverlap(candidate, it) }) {
+                                    saveWorkspaceWidgets(latestWorkspaceWidgets.value.map { if (it.id == widget.id) candidate else it })
+                                }
+                            }
+                        }
+                        Box(modifier = widgetModifier) {
                         Surface(
-                            modifier = widgetModifier.combinedClickable(
-                                onClick = {},
-                                onLongClick = { selectedWorkspaceWidget = widget.id }
-                            ),
+                            modifier = Modifier.fillMaxSize(),
                             shape = RoundedCornerShape(18.dp),
                             color = Color(0xFF171326).copy(alpha = 0.94f),
                             border = BorderStroke(if (resizingWidgetId == widget.id) 2.dp else 1.dp,
@@ -882,8 +925,7 @@ private fun ProstoContent(
                         ) {
                             Column(Modifier.fillMaxSize()) {
                                 Row(
-                                    Modifier.fillMaxWidth().height(8.dp).background(Color.Transparent)
-                                        .combinedClickable(onClick = {}, onLongClick = { selectedWorkspaceWidget = widget.id })
+                                    Modifier.fillMaxWidth().height(26.dp).background(Color.Transparent)
                                         .pointerInput(widget.id) {
                                             detectDragGestures(
                                                 onDragStart = { draggingWidget = true },
@@ -946,60 +988,19 @@ private fun ProstoContent(
                                         }
                                     }
                                 }
-                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.End).padding(4.dp).size(18.dp).clip(CircleShape).background(Color.White)
-                                    .pointerInput(widget.id) {
-                                        detectDragGestures(
-                                            onDragStart = { draggingWidget = true },
-                                            onDragEnd = {
-                                                draggingWidget = false
-                                                if (widget.type == "android") runCatching {
-                                                    val resized = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
-                                                        ?: return@runCatching
-                                                    appWidgetManager.updateAppWidgetOptions(widget.id, Bundle().apply {
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, resized.width.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, resized.width.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, resized.height.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, resized.height.toInt())
-                                                    })
-                                                }
-                                            },
-                                            onDragCancel = { draggingWidget = false },
-                                            onDrag = { change, drag ->
-                                            change.consume()
-                                            val density = this.density
-                                            val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id } ?: return@detectDragGestures
-                                            val resizeMode = widgetProvider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_BOTH
-                                            val canResizeWidth = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL) != 0
-                                            val canResizeHeight = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL) != 0
-                                            val minWidth = maxOf(
-                                                gridCellPitch - 4f,
-                                                (widgetProvider?.minResizeWidth?.takeIf { it > 0 } ?: widgetProvider?.minWidth ?: (gridCellPitch - 4f).toInt()).toFloat()
-                                            )
-                                            val maxWidth = (gridCellPitch * 4f - 4f - current.x).coerceAtLeast(minWidth)
-                                            val minHeight = maxOf(
-                                                86f,
-                                                (widgetProvider?.minResizeHeight?.takeIf { it > 0 } ?: widgetProvider?.minHeight ?: 86).toFloat()
-                                            )
-                                            val maxHeight = (490f - current.y).coerceAtLeast(minHeight)
-                                            val rawWidth = (current.width + drag.x / density).coerceIn(minWidth, maxWidth)
-                                            val rawHeight = (current.height + drag.y / density).coerceIn(minHeight, maxHeight)
-                                            val candidate = current.copy(
-                                                width = if (canResizeWidth) (((kotlin.math.round((rawWidth + 4f) / gridCellPitch)
-                                                    .coerceIn(1f, 4f) * gridCellPitch) - 4f).coerceAtLeast(minWidth)) else current.width,
-                                                height = if (canResizeHeight) (((kotlin.math.round((rawHeight + 12f) / 98f)
-                                                    .coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minHeight)) else current.height
-                                            )
-                                            val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
-                                            val resizedWidgets = if (others.none { widgetsOverlap(candidate, it) }) {
-                                                latestWorkspaceWidgets.value.map { if (it.id == widget.id) candidate else it }
-                                            } else latestWorkspaceWidgets.value
-                                            saveWorkspaceWidgets(resizedWidgets)
-                                            }
-                                        )
-                                    }, contentAlignment = Alignment.Center) {
-                                    Text("↘", color = Color.White, fontSize = 12.sp)
-                                }
                             }
+                        }
+                        // Widget controls float above the widget itself.
+                        Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp)
+                            .clip(CircleShape).background(Color(0xAA171326))
+                            .clickable { selectedWorkspaceWidget = widget.id }, contentAlignment = Alignment.Center) {
+                            Text("⋮", color = Color.White, fontSize = 18.sp)
+                        }
+                        if (resizingWidgetId == widget.id) {
+                            WidgetResizeKnob(Modifier.align(Alignment.CenterStart), "left", resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.CenterEnd), "right", resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.TopCenter), "top", resizeBy)
+                            WidgetResizeKnob(Modifier.align(Alignment.BottomCenter), "bottom", resizeBy)
                         }
                     }
                 }
@@ -1664,8 +1665,27 @@ private fun ProstoContent(
         }
     }
 }
+}
 
 @Composable
+private fun WidgetResizeKnob(
+    modifier: Modifier,
+    edge: String,
+    onResize: (String, Float, Float) -> Unit
+) {
+    Box(
+        modifier = modifier.padding(2.dp).size(20.dp).clip(CircleShape)
+            .background(Color.White).border(1.dp, Purple, CircleShape)
+            .pointerInput(edge) {
+                detectDragGestures { change, drag ->
+                    change.consume()
+                    val density = this.density
+                    onResize(edge, drag.x / density, drag.y / density)
+                }
+            }
+    )
+}
+
 private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
     Surface(
         modifier = modifier,

@@ -97,7 +97,8 @@ private data class WorkspaceWidget(
     val x: Float = 8f,
     val y: Float = 8f,
     val width: Float = 160f,
-    val height: Float = 112f
+    val height: Float = 112f,
+    val page: Int = 0
 )
 
 private data class LauncherApp(
@@ -167,6 +168,8 @@ private fun ProstoContent(
     onThemeChange: (LauncherTheme) -> Unit
 ) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val gridCellPitch = ((configuration.screenWidthDp - 32 - 12) / 4f) + 4f
     val pm = context.packageManager
     val appWidgetManager = remember { AppWidgetManager.getInstance(context) }
     val appWidgetHost = remember { AppWidgetHost(context, 2048) }
@@ -177,29 +180,61 @@ private fun ProstoContent(
     fun readWorkspaceWidgets(): List<WorkspaceWidget> = prefs.getStringSet("workspace_widgets", emptySet())
         ?.mapNotNull { entry ->
             val parts = entry.split(",")
-            if (parts.size == 6) runCatching {
-                WorkspaceWidget(parts[0].toInt(), parts[1], parts[2].toFloat(), parts[3].toFloat(), parts[4].toFloat(), parts[5].toFloat())
+            if (parts.size >= 6) runCatching {
+                WorkspaceWidget(parts[0].toInt(), parts[1], parts[2].toFloat(), parts[3].toFloat(), parts[4].toFloat(), parts[5].toFloat(),
+                    parts.getOrNull(6)?.toIntOrNull() ?: 0)
             }.getOrNull() else null
         }.orEmpty()
     var workspaceWidgets by remember { mutableStateOf(readWorkspaceWidgets()) }
+    var workspacePage by remember { mutableIntStateOf(prefs.getInt("workspace_current_page", 0).coerceAtLeast(0)) }
+    var workspacePageCount by remember { mutableIntStateOf(prefs.getInt("workspace_page_count", 1).coerceAtLeast(1)) }
     fun saveWorkspaceWidgets(items: List<WorkspaceWidget>) {
         workspaceWidgets = items
         prefs.edit().putStringSet("workspace_widgets", items.map {
-            "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height}"
+            "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height},${it.page}"
         }.toSet()).apply()
     }
+    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float> {
+        val maxWidth = gridCellPitch * 4f - 4f
+        val maxHeight = 478f
+        val safeWidth = width.coerceAtMost(maxWidth)
+        val safeHeight = height.coerceAtMost(maxHeight)
+        for (row in 0..4) {
+            for (col in 0..3) {
+                val x = col * gridCellPitch
+                val y = row * 98f
+                if (x + safeWidth > maxWidth + 4f || y + safeHeight > maxHeight + 12f) continue
+                val overlaps = workspaceWidgets.any { other ->
+                    other.page == page &&
+                        x < other.x + other.width && x + safeWidth > other.x &&
+                        y < other.y + other.height && y + safeHeight > other.y
+                }
+                if (!overlaps) return x to y
+            }
+        }
+        return 0f to 0f
+    }
+    fun widgetsOverlap(a: WorkspaceWidget, b: WorkspaceWidget): Boolean =
+        a.page == b.page &&
+            a.x < b.x + b.width && a.x + a.width > b.x &&
+            a.y < b.y + b.height && a.y + a.height > b.y
     fun addOwnWidget(type: String) {
         val own = workspaceWidgets.filter { it.type != "android" }
         val id = (own.minOfOrNull { it.id } ?: 0) - 1
-        val index = own.size
+        val width = gridCellPitch * 2f - 4f
+        val height = 86f
+        val position = nextWidgetPosition(workspacePage, width, height)
         saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
             id = id, type = type,
-            x = if (index % 2 == 0) 8f else 164f,
-            y = 8f + (index / 2) * 108f,
-            width = 150f
+            x = position.first, y = position.second,
+            width = width, height = height,
+            page = workspacePage
         ))
     }
     var widgetSourceOpen by remember { mutableStateOf(false) }
+    var selectedWorkspaceWidget by remember { mutableStateOf<Int?>(null) }
+    var resizingWidgetId by remember { mutableStateOf<Int?>(null) }
+    var draggingWidget by remember { mutableStateOf(false) }
     DisposableEffect(appWidgetHost) {
         runCatching { appWidgetHost.startListening() }
         onDispose { runCatching { appWidgetHost.stopListening() } }
@@ -211,10 +246,15 @@ private fun ProstoContent(
             prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
             if (workspaceWidgets.none { it.id == id }) {
                 val provider = appWidgetManager.getAppWidgetInfo(id)
+                val widgetWidth = maxOf(gridCellPitch * 2f - 4f, provider?.minWidth?.toFloat() ?: gridCellPitch * 2f - 4f)
+                    .coerceAtMost(gridCellPitch * 4f - 4f)
+                val widgetHeight = maxOf(86f, provider?.minHeight?.toFloat() ?: 86f).coerceAtMost(478f)
+                val position = nextWidgetPosition(workspacePage, widgetWidth, widgetHeight)
                 saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
                     id, "android",
-                    width = maxOf(150f, provider?.minWidth?.toFloat() ?: 150f),
-                    height = maxOf(100f, provider?.minHeight?.toFloat() ?: 100f)
+                    x = position.first, y = position.second,
+                    width = widgetWidth, height = widgetHeight,
+                    page = workspacePage
                 ))
             }
         } else if (id > 0) {
@@ -240,11 +280,24 @@ private fun ProstoContent(
     }
     var workspacePackages by remember {
         mutableStateOf(
-            (prefs.getString("workspace_slots", null)?.split("|")
-                ?: oldHome.drop(4)).take(20).let { saved ->
+            (prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)?.split("|")
+                ?: if (workspacePage == 0) oldHome.drop(4) else emptyList()).take(20).let { saved ->
                     saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
                 }
         )
+    }
+    fun widgetOccupiesCell(index: Int, page: Int = workspacePage): Boolean {
+        val row = index / 4
+        val col = index % 4
+        return workspaceWidgets.any { widget ->
+            if (widget.page != page) false else {
+                val widgetCol = (widget.x / gridCellPitch).toInt().coerceIn(0, 3)
+                val widgetRow = (widget.y / 98f).toInt().coerceIn(0, 4)
+                val colSpan = kotlin.math.ceil((widget.width + 4f) / gridCellPitch).toInt().coerceIn(1, 4 - widgetCol)
+                val rowSpan = kotlin.math.ceil((widget.height + 12f) / 98f).toInt().coerceIn(1, 5 - widgetRow)
+                col in widgetCol until (widgetCol + colSpan) && row in widgetRow until (widgetRow + rowSpan)
+            }
+        }
     }
     var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
     var openedFolder by remember { mutableStateOf<String?>(null) }
@@ -319,9 +372,26 @@ private fun ProstoContent(
             slots + List((20 - slots.size).coerceAtLeast(0)) { "" }
         }
         prefs.edit()
-            .putString("workspace_slots", workspacePackages.joinToString("|"))
+            .putString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage",
+                workspacePackages.joinToString("|"))
             .putString("workspace_apps_ordered", workspacePackages.filter { it.isNotBlank() }.joinToString("|"))
+            .putInt("workspace_current_page", workspacePage)
+            .putInt("workspace_page_count", workspacePageCount)
             .apply()
+    }
+    fun switchWorkspacePage(page: Int) {
+        val target = page.coerceIn(0, workspacePageCount - 1)
+        if (target == workspacePage) return
+        workspacePage = target
+        val saved = prefs.getString(if (target == 0) "workspace_slots" else "workspace_slots_$target", null)
+            ?.split("|").orEmpty().take(20)
+        workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+        prefs.edit().putInt("workspace_current_page", target).apply()
+    }
+    fun addWorkspacePage() {
+        workspacePageCount += 1
+        prefs.edit().putInt("workspace_page_count", workspacePageCount).apply()
+        switchWorkspacePage(workspacePageCount - 1)
     }
     fun addToWorkspace(pkg: String) {
         if (pkg in workspacePackages) {
@@ -329,7 +399,7 @@ private fun ProstoContent(
             return
         }
         val slots = workspacePackages.toMutableList()
-        val emptyIndex = slots.indexOfFirst { it.isBlank() }
+        val emptyIndex = slots.indices.firstOrNull { slots[it].isBlank() && !widgetOccupiesCell(it) } ?: -1
         if (emptyIndex < 0) {
             Toast.makeText(context, "Рабочий стол заполнен", Toast.LENGTH_SHORT).show()
             return
@@ -371,7 +441,8 @@ private fun ProstoContent(
         persistFolderNames(if (clean.isBlank()) folderNames - key else folderNames + (key to clean))
     }
     fun moveApp(fromIndex: Int, toIndex: Int) {
-        if (fromIndex !in workspacePackages.indices || toIndex !in workspacePackages.indices || fromIndex == toIndex) return
+        if (fromIndex !in workspacePackages.indices || toIndex !in workspacePackages.indices ||
+            fromIndex == toIndex || widgetOccupiesCell(toIndex)) return
         val changed = workspacePackages.toMutableList()
         val moved = changed[fromIndex]
         val target = changed[toIndex]
@@ -426,14 +497,14 @@ private fun ProstoContent(
             if (slot >= 0) {
                 slots[slot] = remaining
             } else if (remaining.isNotBlank()) {
-                val empty = slots.indexOfFirst { it.isBlank() }
+                val empty = slots.indices.firstOrNull { slots[it].isBlank() && !widgetOccupiesCell(it) } ?: -1
                 if (empty >= 0) slots[empty] = remaining
             }
         } else {
             persistFolders(folderContents + (folderKey to rest))
         }
         if (placeOnDesktop) {
-            val empty = slots.indexOfFirst { it.isBlank() }
+            val empty = slots.indices.firstOrNull { slots[it].isBlank() && !widgetOccupiesCell(it) } ?: -1
             if (empty >= 0) {
                 slots[empty] = pkg
             } else {
@@ -466,7 +537,7 @@ private fun ProstoContent(
         if (slot >= 0) slots[slot] = ""
         var notPlaced = 0
         members.forEach { member ->
-            val empty = slots.indexOfFirst { it.isBlank() }
+            val empty = slots.indices.firstOrNull { slots[it].isBlank() && !widgetOccupiesCell(it) } ?: -1
             if (empty >= 0) slots[empty] = member else notPlaced++
         }
         saveWorkspace(slots)
@@ -551,118 +622,65 @@ private fun ProstoContent(
         } else Box(Modifier.fillMaxSize().background(DarkInk))
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (dark) 0.12f else 0.03f)))
 
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 16.dp)
+                .pointerInput(workspacePage, workspacePageCount, draggingIndex, draggingWidget) {
+                    var horizontalTravel = 0f
+                    androidx.compose.foundation.gestures.detectHorizontalDragGestures(
+                        onHorizontalDrag = { change, amount ->
+                            change.consume()
+                            horizontalTravel += amount
+                        },
+                        onDragEnd = {
+                            if (draggingIndex == null && !draggingWidget && horizontalTravel < -70f) {
+                                if (workspacePage == workspacePageCount - 1) addWorkspacePage()
+                                else switchWorkspacePage(workspacePage + 1)
+                            } else if (draggingIndex == null && !draggingWidget && horizontalTravel > 70f && workspacePage > 0) {
+                                switchWorkspacePage(workspacePage - 1)
+                            }
+                            horizontalTravel = 0f
+                        },
+                        onDragCancel = { horizontalTravel = 0f }
+                    )
+                },
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Spacer(Modifier.height(24.dp))
 
-            if (workspaceWidgets.isNotEmpty()) {
-                Box(Modifier.fillMaxWidth().height(230.dp)) {
-                    workspaceWidgets.forEach { widget ->
-                        val latestWorkspaceWidgets = rememberUpdatedState(workspaceWidgets)
-                        val widgetProvider = if (widget.type == "android") appWidgetManager.getAppWidgetInfo(widget.id) else null
-                        val widgetModifier = Modifier
-                            .offset(x = widget.x.dp, y = widget.y.dp)
-                            .width(widget.width.dp).height(widget.height.dp)
-                        Surface(
-                            modifier = widgetModifier,
-                            shape = RoundedCornerShape(18.dp),
-                            color = Color(0xFF171326).copy(alpha = 0.94f),
-                            border = BorderStroke(1.dp, Purple.copy(alpha = 0.8f))
-                        ) {
-                            Column(Modifier.fillMaxSize()) {
-                                Row(
-                                    Modifier.fillMaxWidth().height(27.dp).background(Purple.copy(alpha = 0.35f))
-                                        .pointerInput(widget.id) {
-                                            detectDragGestures { change, drag ->
-                                                change.consume()
-                                                val density = this.density
-                                                val updated = latestWorkspaceWidgets.value.map { current ->
-                                                    if (current.id == widget.id) current.copy(
-                                                        x = (current.x + drag.x / density).coerceIn(0f, 180f),
-                                                        y = (current.y + drag.y / density).coerceIn(0f, 190f)
-                                                    ) else current
-                                                }
-                                                saveWorkspaceWidgets(updated)
-                                            }
-                                        },
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(if (widget.type == "android") "Виджет Android" else "Виджет Prosto",
-                                        color = Color.White, fontSize = 10.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                                    Text("×", color = Color.White, modifier = Modifier.clickable {
-                                        if (widget.type == "android") {
-                                            appWidgetHost.deleteAppWidgetId(widget.id)
-                                            hostedWidgetIds = hostedWidgetIds - widget.id
-                                            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-                                        }
-                                        saveWorkspaceWidgets(workspaceWidgets.filterNot { it.id == widget.id })
-                                    }.padding(horizontal = 8.dp))
-                                }
-                                Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
-                                    when (widget.type) {
-                                        "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
-                                        "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
-                                        "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ru"))),
-                                                    color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
-                                            }
-                                        }
-                                        "android" -> {
-                                            val provider = widgetProvider
-                                            if (provider != null) AndroidView(
-                                                factory = { appWidgetHost.createView(it, widget.id, provider).apply { setAppWidget(widget.id, provider) } },
-                                                update = { view ->
-                                                    view.setAppWidget(widget.id, provider)
-                                                    appWidgetManager.updateAppWidgetOptions(widget.id, Bundle().apply {
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, widget.width.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, widget.width.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, widget.height.toInt())
-                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, widget.height.toInt())
-                                                    })
-                                                },
-                                                modifier = Modifier.fillMaxSize()
-                                            ) else Text("Виджет недоступен", color = Color.White)
-                                        }
-                                    }
-                                }
-                                Box(Modifier.align(Alignment.End).size(20.dp).background(Purple.copy(alpha = 0.8f))
-                                    .pointerInput(widget.id) {
-                                        detectDragGestures { change, drag ->
-                                            change.consume()
-                                            val density = this.density
-                                            saveWorkspaceWidgets(latestWorkspaceWidgets.value.map { current ->
-                                                if (current.id == widget.id) {
-                                                    val resizeMode = widgetProvider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_BOTH
-                                                    val canResizeWidth = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL) != 0
-                                                    val canResizeHeight = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL) != 0
-                                                    current.copy(
-                                                        width = if (canResizeWidth) (current.width + drag.x / density).coerceIn(
-                                                            maxOf(100f, widgetProvider?.minWidth?.toFloat() ?: 100f), 300f
-                                                        ) else current.width,
-                                                        height = if (canResizeHeight) (current.height + drag.y / density).coerceIn(
-                                                            maxOf(75f, widgetProvider?.minHeight?.toFloat() ?: 75f), 190f
-                                                        ) else current.height
-                                                    )
-                                                } else current
-                                            })
-                                        }
-                                    }, contentAlignment = Alignment.Center) {
-                                    Text("↘", color = Color.White, fontSize = 12.sp)
-                                }
-                            }
+            val occupiedWidgetCells = remember(workspaceWidgets, workspacePage, gridCellPitch) {
+                (0 until 20).filter { widgetOccupiesCell(it) }.toSet()
+            }
+            LaunchedEffect(occupiedWidgetCells, workspacePackages, workspacePage) {
+                occupiedWidgetCells.forEach { occupied ->
+                    slotRects.remove(occupied)
+                    blockedRects.remove("workspace-$occupied")
+                }
+                val normalized = workspacePackages.toMutableList()
+                var changed = false
+                occupiedWidgetCells.forEach { occupied ->
+                    val displaced = normalized.getOrNull(occupied).orEmpty()
+                    if (displaced.isNotBlank()) {
+                        normalized[occupied] = ""
+                        val destination = normalized.indices.firstOrNull {
+                            normalized[it].isBlank() && it !in occupiedWidgetCells
                         }
+                        if (destination != null) normalized[destination] = displaced
+                        changed = true
                     }
                 }
+                if (changed) saveWorkspace(normalized)
             }
-
+            Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = false,
                 contentPadding = PaddingValues(top = 10.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(20, key = { it }) { index ->
+                    if (index !in occupiedWidgetCells) {
                     val pkg = workspacePackages.getOrNull(index).orEmpty()
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
@@ -703,8 +721,28 @@ private fun ProstoContent(
                                     onDragEnd = {
                                         val from = draggingIndex
                                         val target = dropTargetIndex
-                                        if (from != null && target != null) moveApp(from, target)
-                                        // Долгое нажатие на папку без перетаскивания — меню действий.
+                                        val density = context.resources.displayMetrics.density
+                                        val edgeLimit = 24f * density
+                                        val screenWidthPx = configuration.screenWidthDp * density
+                                        if (from != null && movedFar &&
+                                            (dragPoint.x > screenWidthPx - edgeLimit || (dragPoint.x < edgeLimit && workspacePage > 0))) {
+                                            val movedPackage = workspacePackages.getOrNull(from).orEmpty()
+                                            if (movedPackage.isNotBlank()) {
+                                                saveWorkspace(workspacePackages.mapIndexed { idx, value -> if (idx == from) "" else value })
+                                                if (dragPoint.x > screenWidthPx - edgeLimit) {
+                                                    if (workspacePage == workspacePageCount - 1) addWorkspacePage()
+                                                    else switchWorkspacePage(workspacePage + 1)
+                                                } else if (workspacePage > 0) switchWorkspacePage(workspacePage - 1)
+                                                val destination = workspacePackages.indices.firstOrNull {
+                                                    workspacePackages[it].isBlank() && !widgetOccupiesCell(it)
+                                                } ?: -1
+                                                if (destination >= 0) {
+                                                    val changed = workspacePackages.toMutableList()
+                                                    changed[destination] = movedPackage
+                                                    saveWorkspace(changed)
+                                                }
+                                            }
+                                        } else if (from != null && target != null) moveApp(from, target)
                                         if (from != null && isFolder && !movedFar) folderMenuKey = pkg
                                         draggingIndex = null
                                         dropTargetIndex = null
@@ -775,8 +813,158 @@ private fun ProstoContent(
                             )
                         }
                     }
+                
+                    } else {
+                        Box(Modifier.fillMaxWidth().height(86.dp))
+                    }
                 }
             }
+
+                Box(Modifier.fillMaxSize()) {
+                    workspaceWidgets.filter { it.page == workspacePage }.forEach { widget ->
+                        val latestWorkspaceWidgets = rememberUpdatedState(workspaceWidgets)
+                        val widgetProvider = if (widget.type == "android") appWidgetManager.getAppWidgetInfo(widget.id) else null
+                        val widgetModifier = Modifier
+                            .offset(x = widget.x.dp, y = (widget.y + 10f).dp)
+                            .width(widget.width.dp).height(widget.height.dp)
+                        Surface(
+                            modifier = widgetModifier.combinedClickable(
+                                onClick = {},
+                                onLongClick = { selectedWorkspaceWidget = widget.id }
+                            ),
+                            shape = RoundedCornerShape(18.dp),
+                            color = Color(0xFF171326).copy(alpha = 0.94f),
+                            border = BorderStroke(if (resizingWidgetId == widget.id) 2.dp else 1.dp,
+                                if (resizingWidgetId == widget.id) Lavender else Purple.copy(alpha = 0.8f))
+                        ) {
+                            Column(Modifier.fillMaxSize()) {
+                                Row(
+                                    Modifier.fillMaxWidth().height(27.dp).background(Purple.copy(alpha = 0.35f))
+                                        .combinedClickable(onClick = {}, onLongClick = { selectedWorkspaceWidget = widget.id })
+                                        .pointerInput(widget.id) {
+                                            detectDragGestures(
+                                                onDragStart = { draggingWidget = true },
+                                                onDragEnd = { draggingWidget = false },
+                                                onDragCancel = { draggingWidget = false },
+                                                onDrag = { change, drag ->
+                                                change.consume()
+                                                val density = this.density
+                                                val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id } ?: return@detectDragGestures
+                                                val candidate = current.copy(
+                                                    x = (kotlin.math.round((current.x + drag.x / density) / gridCellPitch) * gridCellPitch)
+                                                        .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f)),
+                                                    y = (kotlin.math.round((current.y + drag.y / density) / 98f) * 98f)
+                                                        .coerceIn(0f, (490f - current.height).coerceAtLeast(0f))
+                                                )
+                                                val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
+                                                if (others.none { widgetsOverlap(candidate, it) }) {
+                                                    saveWorkspaceWidgets(latestWorkspaceWidgets.value.map { if (it.id == widget.id) candidate else it })
+                                                }
+                                                }
+                                            )
+                                        },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("Виджет",
+                                        color = Color.White, fontSize = 10.sp, modifier = Modifier.weight(1f).padding(start = 8.dp)
+                                            .combinedClickable(onClick = {}, onLongClick = { selectedWorkspaceWidget = widget.id }))
+                                    if (resizingWidgetId == widget.id) Text("Готово", color = Color.White, fontSize = 10.sp,
+                                        modifier = Modifier.clickable { resizingWidgetId = null }.padding(horizontal = 6.dp))
+
+                                }
+                                Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
+                                    when (widget.type) {
+                                        "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
+                                        "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
+                                        "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ru"))),
+                                                    color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
+                                            }
+                                        }
+                                        "android" -> {
+                                            val provider = widgetProvider
+                                            if (provider != null) AndroidView(
+                                                factory = { ctx ->
+                                                    runCatching {
+                                                        appWidgetHost.createView(ctx, widget.id, provider).apply {
+                                                            setAppWidget(widget.id, provider)
+                                                        }
+                                                    }.getOrElse {
+                                                        TextView(ctx).apply {
+                                                            text = "Виджет временно недоступен"
+                                                            setTextColor(android.graphics.Color.WHITE)
+                                                            gravity = android.view.Gravity.CENTER
+                                                        }
+                                                    }
+                                                },
+                                                update = { /* View is initialized once in factory; avoid re-binding provider on every recomposition. */ },
+                                                modifier = Modifier.fillMaxSize()
+                                            ) else Text("Виджет недоступен", color = Color.White)
+                                        }
+                                    }
+                                }
+                                if (resizingWidgetId == widget.id) Box(Modifier.align(Alignment.End).size(20.dp).background(Purple.copy(alpha = 0.8f))
+                                    .pointerInput(widget.id) {
+                                        detectDragGestures(
+                                            onDragStart = { draggingWidget = true },
+                                            onDragEnd = {
+                                                draggingWidget = false
+                                                if (widget.type == "android") runCatching {
+                                                    val resized = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
+                                                        ?: return@runCatching
+                                                    appWidgetManager.updateAppWidgetOptions(widget.id, Bundle().apply {
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, resized.width.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, resized.width.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, resized.height.toInt())
+                                                        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, resized.height.toInt())
+                                                    })
+                                                }
+                                            },
+                                            onDragCancel = { draggingWidget = false },
+                                            onDrag = { change, drag ->
+                                            change.consume()
+                                            val density = this.density
+                                            val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id } ?: return@detectDragGestures
+                                            val resizeMode = widgetProvider?.resizeMode ?: AppWidgetProviderInfo.RESIZE_BOTH
+                                            val canResizeWidth = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_HORIZONTAL) != 0
+                                            val canResizeHeight = widget.type != "android" || (resizeMode and AppWidgetProviderInfo.RESIZE_VERTICAL) != 0
+                                            val minWidth = maxOf(
+                                                gridCellPitch - 4f,
+                                                (widgetProvider?.minResizeWidth?.takeIf { it > 0 } ?: widgetProvider?.minWidth ?: (gridCellPitch - 4f).toInt()).toFloat()
+                                            )
+                                            val maxWidth = (gridCellPitch * 4f - 4f - current.x).coerceAtLeast(minWidth)
+                                            val minHeight = maxOf(
+                                                86f,
+                                                (widgetProvider?.minResizeHeight?.takeIf { it > 0 } ?: widgetProvider?.minHeight ?: 86).toFloat()
+                                            )
+                                            val maxHeight = (490f - current.y).coerceAtLeast(minHeight)
+                                            val rawWidth = (current.width + drag.x / density).coerceIn(minWidth, maxWidth)
+                                            val rawHeight = (current.height + drag.y / density).coerceIn(minHeight, maxHeight)
+                                            val candidate = current.copy(
+                                                width = if (canResizeWidth) (((kotlin.math.round((rawWidth + 4f) / gridCellPitch)
+                                                    .coerceIn(1f, 4f) * gridCellPitch) - 4f).coerceAtLeast(minWidth)) else current.width,
+                                                height = if (canResizeHeight) (((kotlin.math.round((rawHeight + 12f) / 98f)
+                                                    .coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minHeight)) else current.height
+                                            )
+                                            val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
+                                            val resizedWidgets = if (others.none { widgetsOverlap(candidate, it) }) {
+                                                latestWorkspaceWidgets.value.map { if (it.id == widget.id) candidate else it }
+                                            } else latestWorkspaceWidgets.value
+                                            saveWorkspaceWidgets(resizedWidgets)
+                                            }
+                                        )
+                                    }, contentAlignment = Alignment.Center) {
+                                    Text("↘", color = Color.White, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            
+
+            }
+
 
             Row(
                 Modifier.fillMaxWidth().padding(bottom = 18.dp, top = 8.dp),
@@ -796,6 +984,20 @@ private fun ProstoContent(
                 }
                 DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(workspacePageCount) { page ->
+                    Box(
+                        Modifier.padding(horizontal = 5.dp).size(if (page == workspacePage) 10.dp else 6.dp)
+                            .clip(CircleShape)
+                            .background(if (page == workspacePage) Lavender else Lavender.copy(alpha = 0.45f))
+                            .clickable { switchWorkspacePage(page) }
+                    )
+                }
             }
         }
 
@@ -853,6 +1055,35 @@ private fun ProstoContent(
                     }
                 }
             }
+        }
+
+        selectedWorkspaceWidget?.let { widgetId ->
+            AlertDialog(
+                onDismissRequest = { selectedWorkspaceWidget = null },
+                title = { Text("Виджет") },
+                text = { Text("Что сделать с виджетом?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        resizingWidgetId = widgetId
+                        selectedWorkspaceWidget = null
+                    }) { Text("Изменить размер") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            val target = workspaceWidgets.firstOrNull { it.id == widgetId }
+                            if (target?.type == "android") {
+                                runCatching { appWidgetHost.deleteAppWidgetId(widgetId) }
+                                hostedWidgetIds = hostedWidgetIds - widgetId
+                                prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                            }
+                            saveWorkspaceWidgets(workspaceWidgets.filterNot { it.id == widgetId })
+                            selectedWorkspaceWidget = null
+                        }) { Text("Убрать виджет", color = MaterialTheme.colorScheme.error) }
+                        TextButton(onClick = { selectedWorkspaceWidget = null }) { Text("Отмена") }
+                    }
+                }
+            )
         }
 
         selectedApp?.let { app ->
@@ -948,7 +1179,7 @@ private fun ProstoContent(
                 title = { Text("Добавить виджет") },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Виджеты Prosto Launcher", color = Purple, fontWeight = FontWeight.Bold)
+                        Text("Часы и дата", color = Purple, fontWeight = FontWeight.Bold)
                         listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата").forEach { (type, label) ->
                             Text(label, modifier = Modifier.fillMaxWidth().clickable {
                                 addOwnWidget(type)
@@ -956,7 +1187,7 @@ private fun ProstoContent(
                             }.padding(10.dp))
                         }
                         Divider()
-                        Text("Виджеты Android", modifier = Modifier.fillMaxWidth().clickable {
+                        Text("Другие", modifier = Modifier.fillMaxWidth().clickable {
                             widgetSourceOpen = false
                             val id = appWidgetHost.allocateAppWidgetId()
                             val pick = Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
@@ -979,15 +1210,15 @@ private fun ProstoContent(
                             Text("Виджеты", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                             TextButton(onClick = { widgetsOpen = false }) { Text("Готово") }
                         }
-                        Text("Виджеты Prosto Launcher", style = MaterialTheme.typography.titleMedium, color = Purple)
+                        Text("Часы и дата", style = MaterialTheme.typography.titleMedium, color = Purple)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "digital")); widgetsOpen = false }) { Text("Часы") }
-                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "analog")); widgetsOpen = false }) { Text("Аналоговые") }
-                            FilledTonalButton(onClick = { saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget((workspaceWidgets.maxOfOrNull { it.id } ?: 0) + 1, "date")); widgetsOpen = false }) { Text("Дата") }
+                            FilledTonalButton(onClick = { addOwnWidget("digital"); widgetsOpen = false }) { Text("Часы") }
+                            FilledTonalButton(onClick = { addOwnWidget("analog"); widgetsOpen = false }) { Text("Аналоговые") }
+                            FilledTonalButton(onClick = { addOwnWidget("date"); widgetsOpen = false }) { Text("Дата") }
                         }
                         Spacer(Modifier.height(18.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Другие виджеты Android", style = MaterialTheme.typography.titleMedium,
+                            Text("Другие виджеты", style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.weight(1f))
                             FilledTonalButton(onClick = {
                                 val id = appWidgetHost.allocateAppWidgetId()
@@ -1377,20 +1608,53 @@ private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier
 
 @Composable
 private fun AnalogClockWidget(modifier: Modifier = Modifier) {
+    var clockNow by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            clockNow = LocalDateTime.now()
+            delay(1000)
+        }
+    }
     Surface(
         modifier = modifier,
         shape = CircleShape,
         color = Color(0xFF171326),
         border = BorderStroke(2.dp, Purple)
     ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text("12\n\n9                         3\n\n6", color = Lavender,
-                textAlign = TextAlign.Center, fontSize = 16.sp, lineHeight = 18.sp)
-            Box(Modifier.width(3.dp).height(48.dp).offset(y = (-13).dp)
-                .clip(CircleShape).background(Lavender))
-            Box(Modifier.width(3.dp).height(35.dp).offset(x = 13.dp, y = 7.dp)
-                .graphicsLayer { rotationZ = 55f }.clip(CircleShape).background(Purple))
-            Box(Modifier.size(10.dp).clip(CircleShape).background(Purple))
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize().padding(8.dp)) {
+            val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+            val radius = size.minDimension * 0.44f
+            drawCircle(color = Lavender, radius = radius, center = center,
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx()))
+            for (tick in 0 until 12) {
+                val angle = Math.toRadians(tick * 30.0 - 90.0)
+                val inner = radius * 0.86f
+                val outer = radius * 0.96f
+                drawLine(
+                    color = Lavender,
+                    start = androidx.compose.ui.geometry.Offset(center.x + kotlin.math.cos(angle).toFloat() * inner, center.y + kotlin.math.sin(angle).toFloat() * inner),
+                    end = androidx.compose.ui.geometry.Offset(center.x + kotlin.math.cos(angle).toFloat() * outer, center.y + kotlin.math.sin(angle).toFloat() * outer),
+                    strokeWidth = if (tick % 3 == 0) 3.dp.toPx() else 1.5.dp.toPx()
+                )
+            }
+            val seconds = clockNow.second + clockNow.nano / 1_000_000_000f
+            val minute = clockNow.minute + seconds / 60f
+            val hour = (clockNow.hour % 12) + minute / 60f
+            fun hand(value: Float, divisions: Float, length: Float, width: Float, color: Color) {
+                val angle = Math.toRadians(value / divisions * 360.0 - 90.0)
+                drawLine(
+                    color = color,
+                    start = center,
+                    end = androidx.compose.ui.geometry.Offset(center.x + kotlin.math.cos(angle).toFloat() * radius * length,
+                        center.y + kotlin.math.sin(angle).toFloat() * radius * length),
+                    strokeWidth = width.dp.toPx(),
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round
+                )
+            }
+            hand(hour, 12f, 0.52f, 4f, Lavender)
+            hand(minute, 60f, 0.76f, 2.8f, Lavender)
+            hand(seconds, 60f, 0.84f, 1.2f, Purple)
+            drawCircle(Purple, radius = 4.dp.toPx(), center = center)
         }
     }
 }

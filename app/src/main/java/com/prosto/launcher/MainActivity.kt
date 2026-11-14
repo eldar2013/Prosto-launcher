@@ -38,6 +38,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -77,6 +80,7 @@ import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
@@ -89,6 +93,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -604,33 +609,39 @@ private fun ProstoContent(
 
     Box(
         Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages) {
-            detectTapGestures(
-                onTap = { point ->
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                val pressStart = down.position
+                val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+                var released = false
+                val longPressed = withTimeoutOrNull(longPressTimeout) {
+                    while (true) {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            released = true
+                            break
+                        }
+                    }
+                    false
+                } ?: true
+                if (longPressed && !released) {
                     val blocked = blockedRects.any { (key, rect) ->
                         val occupiedWorkspace = key.startsWith("workspace-") &&
                             workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
                         val occupiedDock = key.startsWith("dock-") &&
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
-                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button" || key.startsWith("widget-")) && rect.contains(pressStart)
                     }
-                    if (!blocked) {
-                        workspaceEditMode = false
+                    if (!blocked && !drawerOpen && !folderVisible) {
+                        workspaceEditMode = true
                         quickMenuOpen = false
-                        selectedWorkspaceWidget = null
-                        resizingWidgetId = null
                     }
-                },
-                onLongPress = { point ->
-                    val blocked = blockedRects.any { (key, rect) ->
-                        val occupiedWorkspace = key.startsWith("workspace-") &&
-                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
-                        val occupiedDock = key.startsWith("dock-") &&
-                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
-                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
-                    }
-                    if (!blocked && !drawerOpen && !folderVisible) { workspaceEditMode = true; quickMenuOpen = false }
                 }
-            )
+                if (!released) {
+                    waitForUpOrCancellation(pass = PointerEventPass.Initial)
+                }
+            }
         }
     ) {
         Box(
@@ -748,7 +759,6 @@ private fun ProstoContent(
                                         pressStart = start
                                         movedFar = false
                                         if (app != null || isFolder) {
-                                            workspaceEditMode = true
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -923,7 +933,9 @@ private fun ProstoContent(
                             }
                         }
                         Box(
-                            modifier = widgetModifier.pointerInput(widget.id) {
+                            modifier = widgetModifier.onGloballyPositioned {
+                                blockedRects["widget-${widget.id}"] = it.boundsInRoot()
+                            }.pointerInput(widget.id) {
                                 detectDragGestures(
                                     onDragStart = { draggingWidget = true },
                                     onDragEnd = { draggingWidget = false },
@@ -1222,7 +1234,7 @@ private fun ProstoContent(
 
         AnimatedVisibility(
             visible = workspaceEditMode,
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 112.dp),
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 12.dp),
             enter = fadeIn(tween(180)) + slideInVertically(initialOffsetY = { it / 2 }),
             exit = fadeOut(tween(120)) + slideOutVertically(targetOffsetY = { it / 2 })
         ) {

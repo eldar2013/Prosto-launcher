@@ -196,7 +196,7 @@ private fun ProstoContent(
             "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height},${it.page}"
         }.toSet()).apply()
     }
-    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float>? {
+    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float> {
         val maxWidth = gridCellPitch * 4f - 4f
         val maxHeight = 478f
         val safeWidth = width.coerceAtMost(maxWidth)
@@ -206,22 +206,216 @@ private fun ProstoContent(
                 val x = col * gridCellPitch
                 val y = row * 98f
                 if (x + safeWidth > maxWidth + 4f || y + safeHeight > maxHeight + 12f) continue
-                val overlapsWidget = workspaceWidgets.any { other ->
+                val overlaps = workspaceWidgets.any { other ->
                     other.page == page &&
                         x < other.x + other.width && x + safeWidth > other.x &&
-                        (y + 10f) < other.y + other.height && (y + 10f) + safeHeight > other.y
+                        y < other.y + other.height && y + safeHeight > other.y
                 }
-                val savedSlotString = prefs.getString(
-                    if (page == 0) "workspace_slots" else "workspace_slots_$page", null
-                ) ?: if (page == 0) {
-                    prefs.getString("home_apps_ordered", null)?.split("|")?.drop(4)?.joinToString("|")
-                } else null
-                val savedSlots = savedSlotString?.split("|").orEmpty()
-                val overlapsApp = savedSlots.take(20).withIndex().any { (index, pkg) ->
-                    if (pkg.isBlank()) false else {
-                        val appX = (index % 4) * gridCellPitch
-                        val appY = (index / 4) * 98f
-                        x < appX + gridCellPitch && x + safeWidth > appX &&
+                if (!overlaps) return x to y
+            }
+        }
+        return 0f to 0f
+    }
+    fun widgetsOverlap(a: WorkspaceWidget, b: WorkspaceWidget): Boolean =
+        a.page == b.page &&
+            a.x < b.x + b.width && a.x + a.width > b.x &&
+            a.y < b.y + b.height && a.y + a.height > b.y
+    fun addOwnWidget(type: String) {
+        val own = workspaceWidgets.filter { it.type != "android" }
+        val id = (own.minOfOrNull { it.id } ?: 0) - 1
+        val width = gridCellPitch * 2f - 4f
+        val height = 86f
+        val position = nextWidgetPosition(workspacePage, width, height)
+        saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+            id = id, type = type,
+            x = position.first, y = position.second,
+            width = width, height = height,
+            page = workspacePage
+        ))
+    }
+    var widgetSourceOpen by remember { mutableStateOf(false) }
+    var selectedWorkspaceWidget by remember { mutableStateOf<Int?>(null) }
+    var resizingWidgetId by remember { mutableStateOf<Int?>(null) }
+    var draggingWidget by remember { mutableStateOf(false) }
+    DisposableEffect(appWidgetHost) {
+        runCatching { appWidgetHost.startListening() }
+        onDispose { runCatching { appWidgetHost.stopListening() } }
+    }
+    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
+            hostedWidgetIds = hostedWidgetIds + id
+            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+            if (workspaceWidgets.none { it.id == id }) {
+                val provider = appWidgetManager.getAppWidgetInfo(id)
+                val widgetWidth = maxOf(gridCellPitch * 2f - 4f, provider?.minWidth?.toFloat() ?: gridCellPitch * 2f - 4f)
+                    .coerceAtMost(gridCellPitch * 4f - 4f)
+                val widgetHeight = maxOf(86f, provider?.minHeight?.toFloat() ?: 86f).coerceAtMost(478f)
+                val position = nextWidgetPosition(workspacePage, widgetWidth, widgetHeight)
+                saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+                    id, "android",
+                    x = position.first, y = position.second,
+                    width = widgetWidth, height = widgetHeight,
+                    page = workspacePage
+                ))
+            }
+        } else if (id > 0) {
+            appWidgetHost.deleteAppWidgetId(id)
+        }
+    }
+    var apps by remember { mutableStateOf(emptyList<LauncherApp>()) }
+    var search by remember { mutableStateOf("") }
+    var drawerOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
+    var widgetsOpen by remember { mutableStateOf(false) }
+    var quickMenuOpen by remember { mutableStateOf(false) }
+    var workspaceEditMode by remember { mutableStateOf(false) }
+    var confirmDeleteWorkspacePage by remember { mutableStateOf(false) }
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+
+    val oldHome = remember {
+        prefs.getString("home_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }.orEmpty()
+    }
+    var dockPackages by remember {
+        mutableStateOf(
+            prefs.getString("dock_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
+                ?: oldHome.take(4)
+        )
+    }
+    var workspacePackages by remember {
+        mutableStateOf(
+            (prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)?.split("|")
+                ?: if (workspacePage == 0) oldHome.drop(4) else emptyList()).take(20).let { saved ->
+                    saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+                }
+        )
+    }
+    fun widgetOccupiesCell(index: Int, page: Int = workspacePage): Boolean {
+        val row = index / 4
+        val col = index % 4
+        return workspaceWidgets.any { widget ->
+            if (widget.page != page) false else {
+                val widgetCol = (widget.x / gridCellPitch).toInt().coerceIn(0, 3)
+                val widgetRow = (widget.y / 98f).toInt().coerceIn(0, 4)
+                val colSpan = kotlin.math.ceil((widget.width + 4f) / gridCellPitch).toInt().coerceIn(1, 4 - widgetCol)
+                val rowSpan = kotlin.math.ceil((widget.height + 12f) / 98f).toInt().coerceIn(1, 5 - widgetRow)
+                col in widgetCol until (widgetCol + colSpan) && row in widgetRow until (widgetRow + rowSpan)
+            }
+        }
+    }
+    var selectedApp by remember { mutableStateOf<LauncherApp?>(null) }
+    var openedFolder by remember { mutableStateOf<String?>(null) }
+    // Отдельный флаг видимости нужен, чтобы карточка папки успевала плавно закрыться.
+    var folderVisible by remember { mutableStateOf(false) }
+    var folderOverlayAlive by remember { mutableStateOf(false) }
+    var folderOrigin by remember { mutableStateOf(Offset.Unspecified) }
+    var overlayCenter by remember { mutableStateOf(Offset.Zero) }
+    val folderProgress = remember { Animatable(0f) }
+    var folderMenuKey by remember { mutableStateOf<String?>(null) }
+    var renamingFolder by remember { mutableStateOf<String?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var memberMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var addToFolderKey by remember { mutableStateOf<String?>(null) }
+    var iconShapeChoice by remember {
+        mutableStateOf(runCatching { IconShapeChoice.valueOf(prefs.getString("icon_shape", "CIRCLE") ?: "CIRCLE") }
+            .getOrDefault(IconShapeChoice.CIRCLE))
+    }
+    var folderOpacity by remember { mutableFloatStateOf(prefs.getFloat("folder_opacity", 0.88f).coerceIn(0.15f, 1f)) }
+    var folderContents by remember {
+        mutableStateOf(prefs.getStringSet("folder_contents", emptySet())?.mapNotNull { entry ->
+            val split = entry.split(":", limit = 2)
+            if (split.size == 2) split[0] to split[1].split(",").filter { it.isNotBlank() } else null
+        }?.toMap().orEmpty())
+    }
+    var folderNames by remember {
+        mutableStateOf(prefs.getStringSet("folder_names", emptySet())?.mapNotNull { entry ->
+            val split = entry.split(":", limit = 2)
+            if (split.size == 2 && split[1].isNotBlank()) split[0] to split[1] else null
+        }?.toMap().orEmpty())
+    }
+    var wallpaperUri by remember { mutableStateOf(prefs.getString("wallpaper_uri", null)) }
+
+    val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            wallpaperUri = uri.toString()
+            prefs.edit().putString("wallpaper_uri", wallpaperUri).apply()
+        }
+    }
+    val defaultWallpaper = remember {
+        runCatching {
+            val encoded = context.resources.openRawResource(R.raw.prosto_wallpaper).bufferedReader().use { it.readText() }
+            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
+    }
+    val customWallpaper = remember(wallpaperUri) {
+        wallpaperUri?.let { raw ->
+            runCatching {
+                context.contentResolver.openInputStream(Uri.parse(raw)).use { stream ->
+                    if (stream != null) BitmapFactory.decodeStream(stream)?.asImageBitmap() else null
+                }
+            }.getOrNull()
+        }
+    }
+
+    val slotRects = remember { mutableStateMapOf<Int, Rect>() }
+    val blockedRects = remember { mutableStateMapOf<String, Rect>() }
+    var draggingIndex by remember { mutableStateOf<Int?>(null) }
+    var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
+    var dragPoint by remember { mutableStateOf(Offset.Zero) }
+
+    fun saveDock(updated: List<String>) {
+        dockPackages = updated.distinct().take(4)
+        prefs.edit().putString("dock_apps_ordered", dockPackages.joinToString("|")).apply()
+    }
+    fun saveWorkspace(updated: List<String>) {
+        workspacePackages = updated.take(20).let { slots ->
+            slots + List((20 - slots.size).coerceAtLeast(0)) { "" }
+        }
+        prefs.edit()
+            .putString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage",
+                workspacePackages.joinToString("|"))
+            .putString("workspace_apps_ordered", workspacePackages.filter { it.isNotBlank() }.joinToString("|"))
+            .putInt("workspace_current_page", workspacePage)
+            .putInt("workspace_page_count", workspacePageCount)
+            .apply()
+    }
+    fun switchWorkspacePage(page: Int) {
+        val target = page.coerceIn(0, workspacePageCount - 1)
+        if (target == workspacePage) return
+        workspacePage = target
+        val saved = prefs.getString(if (target == 0) "workspace_slots" else "workspace_slots_$target", null)
+            ?.split("|").orEmpty().take(20)
+        workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+        prefs.edit().putInt("workspace_current_page", target).apply()
+    }
+    fun addWorkspacePage() {
+        workspacePageCount += 1
+        prefs.edit().putInt("workspace_page_count", workspacePageCount).apply()
+        switchWorkspacePage(workspacePageCount - 1)
+    }
+    fun deleteCurrentWorkspacePage() {
+        if (workspacePageCount <= 1 || workspacePage == 0) return
+        val removedPage = workspacePage
+        saveWorkspaceWidgets(workspaceWidgets.filterNot { it.page == removedPage })
+        prefs.edit().remove("workspace_slots_$removedPage").apply()
+        val shiftedWidgets = workspaceWidgets.filterNot { it.page == removedPage }.map {
+            if (it.page > removedPage) it.copy(page = it.page - 1) else it
+        }
+        saveWorkspaceWidgets(shiftedWidgets)
+        for (page in removedPage + 1 until workspacePageCount) {
+            val slots = prefs.getString("workspace_slots_$page", null)
+            if (slots != null) prefs.edit().putString("workspace_slots_${page - 1}", slots).apply()
+            prefs.edit().remove("workspace_slots_$page").apply()
+        }
+        workspacePageCount = (workspacePageCount - 1).coerceAtLeast(1)
+        prefs.edit().putInt("workspace_page_count", workspacePageCount).apply()
+        workspaceEditMode = false
+        workspacePage = (removedPage - 1).coerceAtLeast(0)
+               x < appX + gridCellPitch && x + safeWidth > appX &&
                             (y + 10f) < appY + 86f && (y + 10f) + safeHeight > appY
                     }
                 }

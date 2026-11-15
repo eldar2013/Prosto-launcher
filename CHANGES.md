@@ -25,3 +25,11 @@
 - Настройки открываются на отдельном полноэкранном экране.
 - Добавлен экран виджетов с двумя встроенными стилями часов и выбором системных Android-виджетов через системный picker.
 - Действие «Удалить» переведено на Intent.ACTION_UNINSTALL_PACKAGE для открытия системного удаления выбранного приложения.
+
+
+## Latest patch from the current project archive
+
+- `MainActivity.kt`: dock and home-screen placements are now independent, so adding an app to the home screen does not auto-remove it from the dock and adding it to the dock does not remove it from the home screen.
+- The app drawer action menu now separately adds/removes an app from the home screen and the dock. Dock capacity stays at four.
+- Widget auto-placement now avoids occupied app cells and other widgets. When there is no space, it does not fallback to `(0, 0)`; it reports no space and discards the allocated Android widget ID as applicable.
+- Build is not verified: no Gradle installation or Android SDK is available in this environment.

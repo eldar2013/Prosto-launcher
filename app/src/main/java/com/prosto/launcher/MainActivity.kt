@@ -196,7 +196,7 @@ private fun ProstoContent(
             "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height},${it.page}"
         }.toSet()).apply()
     }
-    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float> {
+    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float>? {
         val maxWidth = gridCellPitch * 4f - 4f
         val maxHeight = 478f
         val safeWidth = width.coerceAtMost(maxWidth)
@@ -206,15 +206,29 @@ private fun ProstoContent(
                 val x = col * gridCellPitch
                 val y = row * 98f
                 if (x + safeWidth > maxWidth + 4f || y + safeHeight > maxHeight + 12f) continue
-                val overlaps = workspaceWidgets.any { other ->
+                val overlapsWidget = workspaceWidgets.any { other ->
                     other.page == page &&
                         x < other.x + other.width && x + safeWidth > other.x &&
-                        y < other.y + other.height && y + safeHeight > other.y
+                        (y + 10f) < other.y + other.height && (y + 10f) + safeHeight > other.y
                 }
-                if (!overlaps) return x to y
+                val savedSlotString = prefs.getString(
+                    if (page == 0) "workspace_slots" else "workspace_slots_$page", null
+                ) ?: if (page == 0) {
+                    prefs.getString("home_apps_ordered", null)?.split("|")?.drop(4)?.joinToString("|")
+                } else null
+                val savedSlots = savedSlotString?.split("|").orEmpty()
+                val overlapsApp = savedSlots.take(20).withIndex().any { (index, pkg) ->
+                    if (pkg.isBlank()) false else {
+                        val appX = (index % 4) * gridCellPitch
+                        val appY = (index / 4) * 98f
+                        x < appX + gridCellPitch && x + safeWidth > appX &&
+                            (y + 10f) < appY + 86f && (y + 10f) + safeHeight > appY
+                    }
+                }
+                if (!overlapsWidget && !overlapsApp) return x to y
             }
         }
-        return 0f to 0f
+        return null
     }
     fun widgetsOverlap(a: WorkspaceWidget, b: WorkspaceWidget): Boolean =
         a.page == b.page &&
@@ -226,6 +240,10 @@ private fun ProstoContent(
         val width = gridCellPitch * 2f - 4f
         val height = 86f
         val position = nextWidgetPosition(workspacePage, width, height)
+        if (position == null) {
+            Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
+            return
+        }
         saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
             id = id, type = type,
             x = position.first, y = position.second,
@@ -252,12 +270,19 @@ private fun ProstoContent(
                     .coerceAtMost(gridCellPitch * 4f - 4f)
                 val widgetHeight = maxOf(86f, provider?.minHeight?.toFloat() ?: 86f).coerceAtMost(478f)
                 val position = nextWidgetPosition(workspacePage, widgetWidth, widgetHeight)
-                saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
-                    id, "android",
-                    x = position.first, y = position.second,
-                    width = widgetWidth, height = widgetHeight,
-                    page = workspacePage
-                ))
+                if (position == null) {
+                    appWidgetHost.deleteAppWidgetId(id)
+                    hostedWidgetIds = hostedWidgetIds - id
+                    prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                    Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
+                } else {
+                    saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+                        id, "android",
+                        x = position.first, y = position.second,
+                        width = widgetWidth, height = widgetHeight,
+                        page = workspacePage
+                    ))
+                }
             }
         } else if (id > 0) {
             appWidgetHost.deleteAppWidgetId(id)
@@ -431,7 +456,6 @@ private fun ProstoContent(
             Toast.makeText(context, "Рабочий стол заполнен", Toast.LENGTH_SHORT).show()
             return
         }
-        saveDock(dockPackages.filterNot { it == pkg })
         slots[emptyIndex] = pkg
         saveWorkspace(slots)
         Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
@@ -445,12 +469,13 @@ private fun ProstoContent(
             Toast.makeText(context, "Нижняя панель заполнена", Toast.LENGTH_SHORT).show()
             return
         }
-        saveWorkspace(workspacePackages.filterNot { it == pkg })
         saveDock(dockPackages + pkg)
         Toast.makeText(context, "Добавлено в нижнюю панель", Toast.LENGTH_SHORT).show()
     }
     fun removeFromLauncher(pkg: String) {
         saveWorkspace(workspacePackages.map { if (it == pkg) "" else it })
+    }
+    fun removeFromDock(pkg: String) {
         saveDock(dockPackages.filterNot { it == pkg })
     }
     fun persistFolders(updated: Map<String, List<String>>) {
@@ -1151,7 +1176,8 @@ private fun ProstoContent(
         }
 
         selectedApp?.let { app ->
-            val alreadyOnHome = app.packageName in workspacePackages || app.packageName in dockPackages
+            val alreadyOnHome = app.packageName in workspacePackages
+            val alreadyInDock = app.packageName in dockPackages
             AlertDialog(
                 onDismissRequest = { selectedApp = null },
                 title = { Text(app.label) },
@@ -1177,8 +1203,20 @@ private fun ProstoContent(
                         }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = { addToDock(app.packageName); selectedApp = null; drawerOpen = false }
-                        ) { Text("В нижн. панель", modifier = Modifier.fillMaxWidth()) }
+                            onClick = {
+                                if (alreadyInDock) removeFromDock(app.packageName)
+                                else addToDock(app.packageName)
+                                selectedApp = null
+                                drawerOpen = false
+                            },
+                            enabled = alreadyInDock || dockPackages.size < 4
+                        ) {
+                            Text(
+                                if (alreadyInDock) "Убрать из нижней панели" else "В нижнюю панель",
+                                modifier = Modifier.fillMaxWidth(),
+                                color = if (alreadyInDock) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                            )
+                        }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {

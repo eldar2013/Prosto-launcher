@@ -52,3 +52,12 @@ This archive does not include a Gradle wrapper. The repository's GitHub Actions 
 - Changes are implemented in `app/src/main/java/com/prosto/launcher/MainActivity.kt`; launcher icon and wallpaper resources and the existing Gradle/Manifest configuration are retained.
 - Folder names are stored in SharedPreferences (`folder_names`) next to the existing `folder_contents`; old saved data keeps working.
 - `assembleDebug` was **not** run for this version: the environment where the changes were made has no Android SDK / Gradle and no access to Google's Maven repository. The Kotlin file was only checked with the Kotlin 2.0.21 compiler for syntax errors (none found) and for balanced brackets. Please build in Android Studio, or push to GitHub and download the APK from the Actions run (see `.github/workflows/android.yml`).
+
+
+## Latest patch (workspace app placement and widget collision prevention)
+
+- An app can now exist on both the home screen and the dock at the same time. Adding it to one location no longer silently removes it from the other.
+- The app drawer's long-press actions distinguish home-screen placement from dock placement. Dock removal is separate, and the dock remains limited to four apps.
+- Widget placement now checks saved home-screen app slots as well as other widgets. If no valid position is found, an own widget is not added; a system widget's allocated ID is cleaned up instead of placing it at `(0, 0)` over existing content.
+- Updated file: `app/src/main/java/com/prosto/launcher/MainActivity.kt`.
+- Build status for this patch: `assembleDebug` was not run because this environment does not have Gradle or the Android SDK. The Kotlin compiler was invoked as a syntax check without Android/Compose dependencies; its output contained unresolved-reference diagnostics from missing classpath, but no parser diagnostics (`expecting` / `unexpected tokens`). This is not a substitute for an Android build.

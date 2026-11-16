@@ -711,22 +711,20 @@ private fun ProstoContent(
             // Виджеты рисуются отдельным слоем поверх сетки; даже повреждённая запись виджета
             // не должна делать приложения невидимыми или удалять их из сохранённых слотов.
             Box(Modifier.weight(1f).fillMaxWidth()) {
-            Column(
-                modifier = Modifier.fillMaxSize().padding(top = 10.dp, bottom = 12.dp),
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier.fillMaxSize(),
+                userScrollEnabled = false,
+                contentPadding = PaddingValues(top = 10.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                (0 until 5).forEach { row ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        (0 until 4).forEach { column ->
-                            val index = row * 4 + column
+                items(20, key = { it }) { index ->
                     val pkg = workspacePackages.getOrNull(index).orEmpty()
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
                     Box(
-                        Modifier.weight(1f).height(86.dp)
+                        Modifier.fillMaxWidth().height(86.dp)
                             .graphicsLayer {
                                 val shrinking = if (workspaceEditMode) 0.82f else 1f
                                 scaleX = shrinking
@@ -869,7 +867,6 @@ private fun ProstoContent(
                                     .background(Lavender.copy(alpha = 0.28f))
                                     .border(2.dp, Lavender, RoundedCornerShape(14.dp))
                             )
-                        }
                         }
                     }
                 }

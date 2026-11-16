@@ -304,13 +304,27 @@ private fun ProstoContent(
     fun widgetOccupiesCell(index: Int, page: Int = workspacePage): Boolean {
         val row = index / 4
         val col = index % 4
+        val cellLeft = col * gridCellPitch
+        val cellTop = row * 98f
+        val cellRight = cellLeft + gridCellPitch
+        val cellBottom = cellTop + 98f
         return workspaceWidgets.any { widget ->
-            if (widget.page != page) false else {
-                val widgetCol = (widget.x / gridCellPitch).toInt().coerceIn(0, 3)
-                val widgetRow = (widget.y / 98f).toInt().coerceIn(0, 4)
-                val colSpan = kotlin.math.ceil((widget.width + 4f) / gridCellPitch).toInt().coerceIn(1, 4 - widgetCol)
-                val rowSpan = kotlin.math.ceil((widget.height + 12f) / 98f).toInt().coerceIn(1, 5 - widgetRow)
-                col in widgetCol until (widgetCol + colSpan) && row in widgetRow until (widgetRow + rowSpan)
+            if (widget.page != page ||
+                !widget.x.isFinite() || !widget.y.isFinite() ||
+                !widget.width.isFinite() || !widget.height.isFinite() ||
+                widget.width <= 0f || widget.height <= 0f
+            ) {
+                false
+            } else {
+                // Сравниваем реальные границы виджета с ячейкой.
+                // Не прижимаем координаты за пределами экрана к крайнему ряду/столбцу:
+                // старая запись виджета за экраном не должна скрывать иконки.
+                val widgetLeft = widget.x
+                val widgetTop = widget.y
+                val widgetRight = widget.x + widget.width + 4f
+                val widgetBottom = widget.y + widget.height + 12f
+                widgetLeft < cellRight && widgetRight > cellLeft &&
+                    widgetTop < cellBottom && widgetBottom > cellTop
             }
         }
     }

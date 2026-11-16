@@ -697,7 +697,6 @@ private fun ProstoContent(
             // Не скрываем ячейки рабочего стола из-за сохранённых координат виджетов.
             // Виджеты рисуются отдельным слоем поверх сетки; даже повреждённая запись виджета
             // не должна делать приложения невидимыми или удалять их из сохранённых слотов.
-            val occupiedWidgetCells = emptySet<Int>()
             Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
@@ -708,7 +707,6 @@ private fun ProstoContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(20, key = { it }) { index ->
-                    run {
                     val pkg = workspacePackages.getOrNull(index).orEmpty()
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
@@ -857,7 +855,6 @@ private fun ProstoContent(
                                     .border(2.dp, Lavender, RoundedCornerShape(14.dp))
                             )
                         }
-                    }
                     }
                 }
             }

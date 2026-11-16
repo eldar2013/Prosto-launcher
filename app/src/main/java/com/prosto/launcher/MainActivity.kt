@@ -196,10 +196,47 @@ private fun ProstoContent(
             "${it.id},${it.type},${it.x},${it.y},${it.width},${it.height},${it.page}"
         }.toSet()).apply()
     }
+    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float>? {
+        val maxWidth = gridCellPitch * 4f - 4f
+        val maxHeight = 478f
+        val safeWidth = width.coerceAtMost(maxWidth)
+        val safeHeight = height.coerceAtMost(maxHeight)
+        for (row in 0..4) {
+            for (col in 0..3) {
+                val x = col * gridCellPitch
+                val y = row * 98f
+                if (x + safeWidth > maxWidth + 4f || y + safeHeight > maxHeight + 12f) continue
+                val overlaps = workspaceWidgets.any { other ->
+                    other.page == page &&
+                        x < other.x + other.width && x + safeWidth > other.x &&
+                        y < other.y + other.height && y + safeHeight > other.y
+                }
+                if (!overlaps) return x to y
+            }
+        }
+        return null
+    }
     fun widgetsOverlap(a: WorkspaceWidget, b: WorkspaceWidget): Boolean =
         a.page == b.page &&
             a.x < b.x + b.width && a.x + a.width > b.x &&
             a.y < b.y + b.height && a.y + a.height > b.y
+    fun addOwnWidget(type: String) {
+        val own = workspaceWidgets.filter { it.type != "android" }
+        val id = (own.minOfOrNull { it.id } ?: 0) - 1
+        val width = gridCellPitch * 2f - 4f
+        val height = 86f
+        val position = nextWidgetPosition(workspacePage, width, height)
+        if (position == null) {
+            Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
+            return
+        }
+        saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+            id = id, type = type,
+            x = position.first, y = position.second,
+            width = width, height = height,
+            page = workspacePage
+        ))
+    }
     var widgetSourceOpen by remember { mutableStateOf(false) }
     var selectedWorkspaceWidget by remember { mutableStateOf<Int?>(null) }
     var resizingWidgetId by remember { mutableStateOf<Int?>(null) }
@@ -207,6 +244,35 @@ private fun ProstoContent(
     DisposableEffect(appWidgetHost) {
         runCatching { appWidgetHost.startListening() }
         onDispose { runCatching { appWidgetHost.stopListening() } }
+    }
+    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
+        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
+            hostedWidgetIds = hostedWidgetIds + id
+            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+            if (workspaceWidgets.none { it.id == id }) {
+                val provider = appWidgetManager.getAppWidgetInfo(id)
+                val widgetWidth = maxOf(gridCellPitch * 2f - 4f, provider?.minWidth?.toFloat() ?: gridCellPitch * 2f - 4f)
+                    .coerceAtMost(gridCellPitch * 4f - 4f)
+                val widgetHeight = maxOf(86f, provider?.minHeight?.toFloat() ?: 86f).coerceAtMost(478f)
+                val position = nextWidgetPosition(workspacePage, widgetWidth, widgetHeight)
+                if (position == null) {
+                    appWidgetHost.deleteAppWidgetId(id)
+                    hostedWidgetIds = hostedWidgetIds - id
+                    prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                    Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
+                } else {
+                    saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
+                        id, "android",
+                        x = position.first, y = position.second,
+                        width = widgetWidth, height = widgetHeight,
+                        page = workspacePage
+                    ))
+                }
+            }
+        } else if (id > 0) {
+            appWidgetHost.deleteAppWidgetId(id)
+        }
     }
     var apps by remember { mutableStateOf(emptyList<LauncherApp>()) }
     var search by remember { mutableStateOf("") }
@@ -267,12 +333,10 @@ private fun ProstoContent(
     }
     var folderOpacity by remember { mutableFloatStateOf(prefs.getFloat("folder_opacity", 0.88f).coerceIn(0.15f, 1f)) }
     var folderContents by remember {
-        mutableStateOf<Map<String, List<String>>>(
-            prefs.getStringSet("folder_contents", emptySet())?.mapNotNull { entry ->
-                val split = entry.split(":", limit = 2)
-                if (split.size == 2) split[0] to split[1].split(",").filter { it.isNotBlank() } else null
-            }?.toMap().orEmpty()
-        )
+        mutableStateOf(prefs.getStringSet("folder_contents", emptySet())?.mapNotNull { entry ->
+            val split = entry.split(":", limit = 2)
+            if (split.size == 2) split[0] to split[1].split(",").filter { it.isNotBlank() } else null
+        }?.toMap().orEmpty())
     }
     var folderNames by remember {
         mutableStateOf(prefs.getStringSet("folder_names", emptySet())?.mapNotNull { entry ->
@@ -313,84 +377,6 @@ private fun ProstoContent(
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
     var dragPoint by remember { mutableStateOf(Offset.Zero) }
-
-    fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float>? {
-        val maxWidth = gridCellPitch * 4f - 4f
-        val maxHeight = 478f
-        val safeWidth = width.coerceAtMost(maxWidth)
-        val safeHeight = height.coerceAtMost(maxHeight)
-        for (row in 0..4) {
-            for (col in 0..3) {
-                val x = col * gridCellPitch
-                val y = row * 98f
-                if (x + safeWidth > maxWidth + 4f || y + safeHeight > maxHeight + 12f) continue
-                val overlapsWidget = workspaceWidgets.any { other ->
-                    other.page == page &&
-                        x < other.x + other.width && x + safeWidth > other.x &&
-                        y < other.y + other.height && y + safeHeight > other.y
-                }
-                val overlapsApp = page == workspacePage && workspacePackages.indices.any { index ->
-                    val pkg = workspacePackages[index]
-                    if (pkg.isBlank()) false else {
-                        val appX = (index % 4) * gridCellPitch
-                        val appY = (index / 4) * 98f
-                        x < appX + gridCellPitch && x + safeWidth > appX &&
-                            (y + 10f) < appY + 86f && (y + 10f) + safeHeight > appY
-                    }
-                }
-                if (!overlapsWidget && !overlapsApp) return x to y
-            }
-        }
-        return null
-    }
-
-    fun addOwnWidget(type: String) {
-        val own = workspaceWidgets.filter { it.type != "android" }
-        val id = (own.minOfOrNull { it.id } ?: 0) - 1
-        val width = gridCellPitch * 2f - 4f
-        val height = 86f
-        val position = nextWidgetPosition(workspacePage, width, height)
-        if (position == null) {
-            Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
-            return
-        }
-        saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
-            id = id, type = type,
-            x = position.first, y = position.second,
-            width = width, height = height,
-            page = workspacePage
-        ))
-    }
-
-    val widgetPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val id = result.data?.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1) ?: -1
-        if (result.resultCode == android.app.Activity.RESULT_OK && id > 0) {
-            hostedWidgetIds = hostedWidgetIds + id
-            prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-            if (workspaceWidgets.none { it.id == id }) {
-                val provider = appWidgetManager.getAppWidgetInfo(id)
-                val widgetWidth = maxOf(gridCellPitch * 2f - 4f, provider?.minWidth?.toFloat() ?: gridCellPitch * 2f - 4f)
-                    .coerceAtMost(gridCellPitch * 4f - 4f)
-                val widgetHeight = maxOf(86f, provider?.minHeight?.toFloat() ?: 86f).coerceAtMost(478f)
-                val position = nextWidgetPosition(workspacePage, widgetWidth, widgetHeight)
-                if (position == null) {
-                    appWidgetHost.deleteAppWidgetId(id)
-                    hostedWidgetIds = hostedWidgetIds - id
-                    prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-                    Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
-                } else {
-                    saveWorkspaceWidgets(workspaceWidgets + WorkspaceWidget(
-                        id, "android",
-                        x = position.first, y = position.second,
-                        width = widgetWidth, height = widgetHeight,
-                        page = workspacePage
-                    ))
-                }
-            }
-        } else if (id > 0) {
-            appWidgetHost.deleteAppWidgetId(id)
-        }
-    }
 
     fun saveDock(updated: List<String>) {
         dockPackages = updated.distinct().take(4)
@@ -456,6 +442,7 @@ private fun ProstoContent(
             Toast.makeText(context, "Рабочий стол заполнен", Toast.LENGTH_SHORT).show()
             return
         }
+        saveDock(dockPackages.filterNot { it == pkg })
         slots[emptyIndex] = pkg
         saveWorkspace(slots)
         Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
@@ -469,13 +456,12 @@ private fun ProstoContent(
             Toast.makeText(context, "Нижняя панель заполнена", Toast.LENGTH_SHORT).show()
             return
         }
+        saveWorkspace(workspacePackages.filterNot { it == pkg })
         saveDock(dockPackages + pkg)
         Toast.makeText(context, "Добавлено в нижнюю панель", Toast.LENGTH_SHORT).show()
     }
     fun removeFromLauncher(pkg: String) {
         saveWorkspace(workspacePackages.map { if (it == pkg) "" else it })
-    }
-    fun removeFromDock(pkg: String) {
         saveDock(dockPackages.filterNot { it == pkg })
     }
     fun persistFolders(updated: Map<String, List<String>>) {
@@ -681,8 +667,7 @@ private fun ProstoContent(
                         },
                         onDragEnd = {
                             if (draggingIndex == null && !draggingWidget && horizontalTravel < -70f) {
-                                if (workspacePage == workspacePageCount - 1) addWorkspacePage()
-                                else switchWorkspacePage(workspacePage + 1)
+                                if (workspacePage < workspacePageCount - 1) switchWorkspacePage(workspacePage + 1)
                             } else if (draggingIndex == null && !draggingWidget && horizontalTravel > 70f && workspacePage > 0) {
                                 switchWorkspacePage(workspacePage - 1)
                             }
@@ -1177,7 +1162,6 @@ private fun ProstoContent(
 
         selectedApp?.let { app ->
             val alreadyOnHome = app.packageName in workspacePackages
-            val alreadyInDock = app.packageName in dockPackages
             AlertDialog(
                 onDismissRequest = { selectedApp = null },
                 title = { Text(app.label) },
@@ -1203,20 +1187,8 @@ private fun ProstoContent(
                         }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                if (alreadyInDock) removeFromDock(app.packageName)
-                                else addToDock(app.packageName)
-                                selectedApp = null
-                                drawerOpen = false
-                            },
-                            enabled = alreadyInDock || dockPackages.size < 4
-                        ) {
-                            Text(
-                                if (alreadyInDock) "Убрать из нижней панели" else "В нижнюю панель",
-                                modifier = Modifier.fillMaxWidth(),
-                                color = if (alreadyInDock) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                            )
-                        }
+                            onClick = { addToDock(app.packageName); selectedApp = null; drawerOpen = false }
+                        ) { Text("В нижн. панель", modifier = Modifier.fillMaxWidth()) }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
@@ -2024,3 +1996,4 @@ private fun launchApp(
         context.startActivity(intent, options)
     }
 }
+

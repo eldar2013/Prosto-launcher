@@ -694,29 +694,10 @@ private fun ProstoContent(
         ) {
             Spacer(Modifier.height(24.dp))
 
-            val occupiedWidgetCells = remember(workspaceWidgets, workspacePage, gridCellPitch) {
-                (0 until 20).filter { widgetOccupiesCell(it) }.toSet()
-            }
-            LaunchedEffect(occupiedWidgetCells, workspacePackages, workspacePage) {
-                occupiedWidgetCells.forEach { occupied ->
-                    slotRects.remove(occupied)
-                    blockedRects.remove("workspace-$occupied")
-                }
-                val normalized = workspacePackages.toMutableList()
-                var changed = false
-                occupiedWidgetCells.forEach { occupied ->
-                    val displaced = normalized.getOrNull(occupied).orEmpty()
-                    if (displaced.isNotBlank()) {
-                        normalized[occupied] = ""
-                        val destination = normalized.indices.firstOrNull {
-                            normalized[it].isBlank() && it !in occupiedWidgetCells
-                        }
-                        if (destination != null) normalized[destination] = displaced
-                        changed = true
-                    }
-                }
-                if (changed) saveWorkspace(normalized)
-            }
+            // Не скрываем ячейки рабочего стола из-за сохранённых координат виджетов.
+            // Виджеты рисуются отдельным слоем поверх сетки; даже повреждённая запись виджета
+            // не должна делать приложения невидимыми или удалять их из сохранённых слотов.
+            val occupiedWidgetCells = emptySet<Int>()
             Box(Modifier.weight(1f).fillMaxWidth()) {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(4),
@@ -727,7 +708,7 @@ private fun ProstoContent(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(20, key = { it }) { index ->
-                    if (index !in occupiedWidgetCells) {
+                    run {
                     val pkg = workspacePackages.getOrNull(index).orEmpty()
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
@@ -877,9 +858,6 @@ private fun ProstoContent(
                             )
                         }
                     }
-                
-                    } else {
-                        Box(Modifier.fillMaxWidth().height(86.dp))
                     }
                 }
             }

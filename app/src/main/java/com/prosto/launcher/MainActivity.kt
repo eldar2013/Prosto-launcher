@@ -472,7 +472,7 @@ private fun ProstoContent(
         saveDock(dockPackages.filterNot { it == pkg })
         slots[emptyIndex] = pkg
         saveWorkspace(slots)
-        Toast.makeText(context, "Добавлено на главный экран", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Добавлено: слот ${emptyIndex + 1}, страница ${workspacePage + 1}; значок ${if (apps.any { it.packageName == pkg }) "найден" else "не найден"}", Toast.LENGTH_LONG).show()
     }
     fun addToDock(pkg: String) {
         if (pkg in dockPackages) {

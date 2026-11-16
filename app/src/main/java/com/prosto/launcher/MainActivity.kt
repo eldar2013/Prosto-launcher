@@ -188,7 +188,7 @@ private fun ProstoContent(
             }.getOrNull() else null
         }.orEmpty()
     var workspaceWidgets by remember { mutableStateOf(readWorkspaceWidgets()) }
-    var workspacePage by remember { mutableIntStateOf(prefs.getInt("workspace_current_page", 0).coerceAtLeast(0)) }
+    var workspacePage by remember { mutableIntStateOf(prefs.getInt("workspace_current_page", 0).coerceIn(0, prefs.getInt("workspace_page_count", 1).coerceAtLeast(1) - 1)) }
     var workspacePageCount by remember { mutableIntStateOf(prefs.getInt("workspace_page_count", 1).coerceAtLeast(1)) }
     fun saveWorkspaceWidgets(items: List<WorkspaceWidget>) {
         workspaceWidgets = items
@@ -296,7 +296,7 @@ private fun ProstoContent(
     var workspacePackages by remember {
         mutableStateOf(
             (prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)?.split("|")
-                ?: if (workspacePage == 0) oldHome.drop(4) else emptyList()).take(20).let { saved ->
+                ?: if (workspacePage == 0) (prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() } ?: oldHome.drop(4)) else emptyList()).take(20).let { saved ->
                     saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
                 }
         )

@@ -295,10 +295,18 @@ private fun ProstoContent(
     }
     var workspacePackages by remember {
         mutableStateOf(
-            (prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)?.split("|")
-                ?: if (workspacePage == 0) (prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() } ?: oldHome.drop(4)) else emptyList()).take(20).let { saved ->
-                    saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
-                }
+            run {
+                val pageKey = if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage"
+                val storedSlots = prefs.getString(pageKey, null)?.split("|")?.take(20).orEmpty()
+                // Старые версии могли оставить ключ workspace_slots пустым, хотя список
+                // workspace_apps_ordered ещё содержал приложения. Восстанавливаем их.
+                val fallback = if (workspacePage == 0) {
+                    prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
+                        ?.take(20) ?: oldHome.drop(4).take(20)
+                } else emptyList()
+                val saved = if (storedSlots.any { it.isNotBlank() }) storedSlots else fallback
+                saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+            }
         )
     }
     fun widgetOccupiesCell(index: Int, page: Int = workspacePage): Boolean {
@@ -412,8 +420,13 @@ private fun ProstoContent(
         val target = page.coerceIn(0, workspacePageCount - 1)
         if (target == workspacePage) return
         workspacePage = target
-        val saved = prefs.getString(if (target == 0) "workspace_slots" else "workspace_slots_$target", null)
+        val storedSlots = prefs.getString(if (target == 0) "workspace_slots" else "workspace_slots_$target", null)
             ?.split("|").orEmpty().take(20)
+        val fallback = if (target == 0) {
+            prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
+                ?.take(20) ?: oldHome.drop(4).take(20)
+        } else emptyList()
+        val saved = if (storedSlots.any { it.isNotBlank() }) storedSlots else fallback
         workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
         prefs.edit().putInt("workspace_current_page", target).apply()
     }

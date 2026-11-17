@@ -841,16 +841,7 @@ private fun ProstoContent(
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
                     Box(
-                        Modifier.weight(1f).pointerInput(index, app, isFolder, drawerOpen, folderVisible) {
-                            if (app == null && !isFolder) {
-                                detectTapGestures(onLongPress = {
-                                    if (!drawerOpen && !folderVisible) {
-                                        workspaceEditMode = true
-                                        quickMenuOpen = false
-                                    }
-                                })
-                            }
-                        }
+                        Modifier.weight(1f)
                     ) {
                     Box(
                         Modifier.fillMaxWidth().height(86.dp)
@@ -1190,8 +1181,18 @@ private fun ProstoContent(
                 DockSlot(dockApps.getOrNull(0), "dock-left-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 DockSlot(dockApps.getOrNull(1), "dock-left-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 Surface(
-                    modifier = Modifier.size(54.dp).onGloballyPositioned { blockedRects["drawer-button"] = it.boundsInRoot() }
-                        .clickable { drawerOpen = true },
+                    modifier = Modifier.size(54.dp)
+                        .onGloballyPositioned { blockedRects["drawer-button"] = it.boundsInRoot() }
+                        .combinedClickable(
+                            onClick = { drawerOpen = true },
+                            onLongClick = {
+                                if (!drawerOpen && !folderVisible) {
+                                    drawerOpen = false
+                                    quickMenuOpen = false
+                                    workspaceEditMode = true
+                                }
+                            }
+                        ),
                     shape = CircleShape, color = Color(0xFFEDE5FF).copy(alpha = 0.92f), shadowElevation = 5.dp
                 ) {
                     Box(contentAlignment = Alignment.Center) {

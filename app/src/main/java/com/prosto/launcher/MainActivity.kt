@@ -806,8 +806,10 @@ private fun ProstoContent(
         } else Box(Modifier.fillMaxSize().background(DarkInk))
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = if (dark) 0.12f else 0.03f)))
 
-        Column(
-            Modifier.fillMaxSize().padding(horizontal = 16.dp)
+        // Рабочий стол теперь лежит в обычном Box на весь экран — так же, как нижняя панель,
+        // которая рисуется нормально. Раньше здесь был Column с weight-блоком внутри.
+        Box(
+            Modifier.fillMaxSize().padding(start = 16.dp, end = 16.dp, top = 24.dp)
                 .pointerInput(workspacePage, workspacePageCount, draggingIndex, draggingWidget) {
                     var horizontalTravel = 0f
                     detectHorizontalDragGestures(
@@ -825,15 +827,12 @@ private fun ProstoContent(
                         },
                         onDragCancel = { horizontalTravel = 0f }
                     )
-                },
-            horizontalAlignment = Alignment.CenterHorizontally
+                }
         ) {
-            Spacer(Modifier.height(24.dp))
-
             // Не скрываем ячейки рабочего стола из-за сохранённых координат виджетов.
             // Виджеты рисуются отдельным слоем поверх сетки; даже повреждённая запись виджета
             // не должна делать приложения невидимыми или удалять их из сохранённых слотов.
-            Box(Modifier.weight(1f).fillMaxWidth()) {
+            Box(Modifier.fillMaxSize()) {
             // Обычная (не ленивая) сетка 4x5: все 20 ячеек всегда составляются и рисуются,
             // поэтому добавленные приложения не могут «пропасть» из-за LazyVerticalGrid.
             Column(

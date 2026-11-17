@@ -883,7 +883,8 @@ private fun ProstoContent(
                                         pressStart = start
                                         movedFar = false
                                         if (app != null || isFolder) {
-                                            workspaceEditMode = true
+                                            // Перетаскивание не включает режим редактирования с нижним меню.
+                                            
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -1077,7 +1078,7 @@ private fun ProstoContent(
                                             x = (current.x + drag.x / density)
                                                 .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f)),
                                             y = (current.y + drag.y / density)
-                                                .coerceIn(0f, (490f - current.height).coerceAtLeast(0f))
+                                                .coerceIn(0f, (586f - current.height).coerceAtLeast(0f))
                                         )
                                         val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
                                         if (others.none { widgetsOverlap(candidate, it) }) {

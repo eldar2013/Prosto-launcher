@@ -89,9 +89,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.URL
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+
+private data class WeatherCity(val name: String, val latitude: Double, val longitude: Double)
+private data class WeatherInfo(val temperature: Int, val description: String, val emoji: String)
+private val russianWeatherCities = listOf(
+ WeatherCity("Москва",55.7558,37.6173), WeatherCity("Санкт-Петербург",59.9343,30.3351), WeatherCity("Казань",55.7961,49.1064), WeatherCity("Екатеринбург",56.8389,60.6057), WeatherCity("Новосибирск",55.0084,82.9357), WeatherCity("Краснодар",45.0355,38.9753), WeatherCity("Нижний Новгород",56.2965,43.9361), WeatherCity("Самара",53.1959,50.1002), WeatherCity("Сочи",43.5855,39.7231), WeatherCity("Ростов-на-Дону",47.2357,39.7015), WeatherCity("Воронеж",51.6608,39.2003), WeatherCity("Уфа",54.7388,55.9721), WeatherCity("Челябинск",55.1644,61.4368), WeatherCity("Пермь",58.0105,56.2502), WeatherCity("Омск",54.9885,73.3242), WeatherCity("Волгоград",48.7080,44.5133), WeatherCity("Красноярск",56.0153,92.8932), WeatherCity("Тюмень",57.1522,65.5272), WeatherCity("Иркутск",52.2864,104.2807), WeatherCity("Владивосток",43.1155,131.8855), WeatherCity("Калининград",54.7104,20.4522), WeatherCity("Саратов",51.5336,46.0343)
+)
+private suspend fun loadWeather(city: WeatherCity): WeatherInfo? = withContext(Dispatchers.IO) {
+ runCatching {
+  val url=URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto")
+  val json=JSONObject(url.openConnection().apply { connectTimeout=8000; readTimeout=8000 }.getInputStream().bufferedReader().use { it.readText() })
+  val current=json.getJSONObject("current"); val code=current.getInt("weather_code")
+  val (description,emoji)=when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
+  WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(),description,emoji)
+ }.getOrNull()
+}
 
 private data class WorkspaceWidget(
     val id: Int,
@@ -277,6 +296,17 @@ private fun ProstoContent(
     var selectedWorkspaceWidget by remember { mutableStateOf<Int?>(null) }
     var resizingWidgetId by remember { mutableStateOf<Int?>(null) }
     var draggingWidget by remember { mutableStateOf(false) }
+    var weatherCityName by remember { mutableStateOf(prefs.getString("weather_city_name", "") ?: "") }
+    var weatherCityDialog by remember { mutableStateOf(false) }
+    var pendingWeatherWidget by remember { mutableStateOf(false) }
+    var weatherInfo by remember { mutableStateOf<WeatherInfo?>(null) }
+    var weatherLoading by remember { mutableStateOf(false) }
+    LaunchedEffect(weatherCityName) {
+        weatherInfo = null
+        val city = russianWeatherCities.firstOrNull { it.name == weatherCityName } ?: return@LaunchedEffect
+        while (true) { weatherLoading = true; weatherInfo = loadWeather(city); weatherLoading = false; delay(30 * 60 * 1000L) }
+    }
+    fun requestWeatherWidget() { if (weatherCityName.isBlank()) { pendingWeatherWidget = true; weatherCityDialog = true } else addOwnWidget("weather") }
     DisposableEffect(appWidgetHost) {
         runCatching { appWidgetHost.startListening() }
         onDispose { runCatching { appWidgetHost.stopListening() } }
@@ -1108,9 +1138,8 @@ private fun ProstoContent(
                         Surface(
                             modifier = Modifier.fillMaxSize(),
                             shape = RoundedCornerShape(18.dp),
-                            color = Color(0xFF171326).copy(alpha = 0.94f),
-                            border = BorderStroke(if (resizingWidgetId == widget.id) 2.dp else 1.dp,
-                                if (resizingWidgetId == widget.id) Lavender else Purple.copy(alpha = 0.8f))
+                            color = Color.Transparent,
+                            border = if (widget.type == "android" && resizingWidgetId == widget.id) BorderStroke(2.dp, Lavender) else null
                         ) {
                             Column(Modifier.fillMaxSize()) {
                                 Row(
@@ -1126,6 +1155,7 @@ private fun ProstoContent(
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
                                     when (widget.type) {
                                         "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
+                                        "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, Modifier.fillMaxSize())
                                         "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
                                         "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
                                             Box(contentAlignment = Alignment.Center) {
@@ -1434,6 +1464,15 @@ private fun ProstoContent(
         }
 
 
+        if (weatherCityDialog) {
+            AlertDialog(onDismissRequest = { weatherCityDialog = false; pendingWeatherWidget = false }, title = { Text("Выбери город") },
+                text = { LazyColumn(Modifier.heightIn(max = 420.dp)) { lazyItems(russianWeatherCities) { city ->
+                    Text(city.name, modifier = Modifier.fillMaxWidth().clickable {
+                        weatherCityName = city.name; prefs.edit().putString("weather_city_name", city.name).apply(); weatherCityDialog = false
+                        if (pendingWeatherWidget) { pendingWeatherWidget = false; addOwnWidget("weather") }
+                    }.padding(vertical = 12.dp, horizontal = 8.dp))
+                } } }, confirmButton = { TextButton(onClick = { weatherCityDialog = false; pendingWeatherWidget = false }) { Text("Отмена") } })
+        }
         if (widgetSourceOpen) {
             AlertDialog(
                 onDismissRequest = { widgetSourceOpen = false },
@@ -1441,9 +1480,9 @@ private fun ProstoContent(
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Часы и дата", color = Purple, fontWeight = FontWeight.Bold)
-                        listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата").forEach { (type, label) ->
+                        listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата", "weather" to "Погода").forEach { (type, label) ->
                             Text(label, modifier = Modifier.fillMaxWidth().clickable {
-                                addOwnWidget(type)
+                                if (type == "weather") requestWeatherWidget() else addOwnWidget(type)
                                 widgetSourceOpen = false
                             }.padding(10.dp))
                         }
@@ -1477,6 +1516,7 @@ private fun ProstoContent(
                             FilledTonalButton(onClick = { addOwnWidget("digital"); widgetsOpen = false }) { Text("Часы") }
                             FilledTonalButton(onClick = { addOwnWidget("analog"); widgetsOpen = false }) { Text("Аналоговые") }
                             FilledTonalButton(onClick = { addOwnWidget("date"); widgetsOpen = false }) { Text("Дата") }
+                            FilledTonalButton(onClick = { requestWeatherWidget(); widgetsOpen = false }) { Text("Погода") }
                         }
                         Spacer(Modifier.height(18.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1581,6 +1621,10 @@ private fun ProstoContent(
                                         Text(label)
                                     }
                                 }
+                                Divider()
+                                Text("Погода", style = MaterialTheme.typography.titleLarge, color = Purple)
+                                Text(if (weatherCityName.isBlank()) "Город не выбран" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                OutlinedButton(onClick = { weatherCityDialog = true }) { Text("Выбрать город") }
                                 Divider()
                                 Text("Прозрачность папок", style = MaterialTheme.typography.titleMedium)
                                 Text("${(folderOpacity * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1900,19 +1944,20 @@ private fun WidgetResizeKnob(
 
 @Composable
 private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(28.dp),
-        color = Color(0xFF171326),
-        border = BorderStroke(1.dp, Purple.copy(alpha = 0.8f))
-    ) {
-        Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 38.sp,
-                fontWeight = FontWeight.Bold, color = Lavender)
-            Text(now.format(DateTimeFormatter.ofPattern("d MMMM", Locale("ru"))),
-                color = Lavender, fontSize = 13.sp)
-            Text("C6", color = Lavender.copy(alpha = 0.75f), fontSize = 11.sp)
+    Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 48.sp, fontWeight = FontWeight.Light, color = Color.White)
+        Text(now.format(DateTimeFormatter.ofPattern("EEE, d MMMM", Locale("ru"))), color = Color.White.copy(alpha = 0.92f), fontSize = 17.sp)
+    }
+}
+
+@Composable
+private fun WeatherWidget(cityName: String, weather: WeatherInfo?, loading: Boolean, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxSize().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+        Text(weather?.emoji ?: "🌤️", fontSize = 48.sp); Spacer(Modifier.width(12.dp))
+        Column {
+            Text(weather?.let { "${if (it.temperature > 0) "+" else ""}${it.temperature}°" } ?: "—°", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Light)
+            Text(weather?.description ?: if (loading) "Загрузка..." else "Нет данных", color = Color.White.copy(alpha = 0.92f), fontSize = 15.sp)
+            Text(cityName, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
         }
     }
 }

@@ -102,13 +102,44 @@ private data class WeatherInfo(val temperature: Int, val description: String, va
 private val russianWeatherCities = listOf(
  WeatherCity("Москва",55.7558,37.6173), WeatherCity("Санкт-Петербург",59.9343,30.3351), WeatherCity("Казань",55.7961,49.1064), WeatherCity("Екатеринбург",56.8389,60.6057), WeatherCity("Новосибирск",55.0084,82.9357), WeatherCity("Краснодар",45.0355,38.9753), WeatherCity("Нижний Новгород",56.2965,43.9361), WeatherCity("Самара",53.1959,50.1002), WeatherCity("Сочи",43.5855,39.7231), WeatherCity("Ростов-на-Дону",47.2357,39.7015), WeatherCity("Воронеж",51.6608,39.2003), WeatherCity("Уфа",54.7388,55.9721), WeatherCity("Челябинск",55.1644,61.4368), WeatherCity("Пермь",58.0105,56.2502), WeatherCity("Омск",54.9885,73.3242), WeatherCity("Волгоград",48.7080,44.5133), WeatherCity("Красноярск",56.0153,92.8932), WeatherCity("Тюмень",57.1522,65.5272), WeatherCity("Иркутск",52.2864,104.2807), WeatherCity("Владивосток",43.1155,131.8855), WeatherCity("Калининград",54.7104,20.4522), WeatherCity("Саратов",51.5336,46.0343)
 )
-private suspend fun loadWeather(city: WeatherCity): WeatherInfo? = withContext(Dispatchers.IO) {
+private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: String): WeatherInfo? = withContext(Dispatchers.IO) {
  runCatching {
-  val url=URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto")
-  val json=JSONObject(url.openConnection().apply { connectTimeout=8000; readTimeout=8000 }.getInputStream().bufferedReader().use { it.readText() })
-  val current=json.getJSONObject("current"); val code=current.getInt("weather_code")
-  val (description,emoji)=when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
-  WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(),description,emoji)
+  val connection = when (source) {
+   "yandex" -> URL("https://api.weather.yandex.ru/v2/informers?lat=${city.latitude}&lon=${city.longitude}&lang=ru_RU").openConnection().apply { setRequestProperty("X-Yandex-Weather-Key", apiKey) }
+   "google" -> URL("https://weather.googleapis.com/v1/currentConditions:lookup?key=$apiKey&location.latitude=${city.latitude}&location.longitude=${city.longitude}").openConnection()
+   else -> URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto").openConnection()
+  }
+  connection.connectTimeout = 10000; connection.readTimeout = 10000
+  val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
+  when (source) {
+   "yandex" -> {
+    val fact = json.getJSONObject("fact")
+    val condition = fact.optString("condition", "cloudy")
+    val (description, emoji) = when {
+     condition.contains("clear") -> "Ясно" to "☀️"
+     condition.contains("partly") -> "Переменная облачность" to "🌤️"
+     condition.contains("cloud") -> "Облачно" to "☁️"
+     condition.contains("rain") || condition.contains("drizzle") -> "Дождь" to "🌧️"
+     condition.contains("snow") -> "Снег" to "❄️"
+     condition.contains("thunder") -> "Гроза" to "⛈️"
+     condition.contains("fog") -> "Туман" to "🌫️"
+     else -> condition to "🌡️"
+    }
+    WeatherInfo(fact.getInt("temp"), description, emoji)
+   }
+   "google" -> {
+    val current = json.getJSONObject("temperature").getDouble("degrees")
+    val description = json.optJSONObject("weatherCondition")?.optJSONObject("description")?.optString("text") ?: "Погода"
+    val lower = description.lowercase()
+    val emoji = when { "rain" in lower || "дожд" in lower -> "🌧️"; "snow" in lower || "снег" in lower -> "❄️"; "thunder" in lower || "гроз" in lower -> "⛈️"; "cloud" in lower || "облач" in lower -> "☁️"; else -> "☀️" }
+    WeatherInfo(kotlin.math.round(current).toInt(), description, emoji)
+   }
+   else -> {
+    val current = json.getJSONObject("current"); val code = current.getInt("weather_code")
+    val (description, emoji) = when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
+    WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(), description, emoji)
+   }
+  }
  }.getOrNull()
 }
 
@@ -301,10 +332,26 @@ private fun ProstoContent(
     var pendingWeatherWidget by remember { mutableStateOf(false) }
     var weatherInfo by remember { mutableStateOf<WeatherInfo?>(null) }
     var weatherLoading by remember { mutableStateOf(false) }
-    LaunchedEffect(weatherCityName) {
-        weatherInfo = null
+    var weatherSource by remember { mutableStateOf(prefs.getString("weather_source", "openmeteo") ?: "openmeteo") }
+    var yandexWeatherKey by remember { mutableStateOf(prefs.getString("weather_yandex_key", "") ?: "") }
+    var googleWeatherKey by remember { mutableStateOf(prefs.getString("weather_google_key", "") ?: "") }
+    var weatherError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(weatherCityName, weatherSource, yandexWeatherKey, googleWeatherKey) {
+        weatherInfo = null; weatherError = null
         val city = russianWeatherCities.firstOrNull { it.name == weatherCityName } ?: return@LaunchedEffect
-        while (true) { weatherLoading = true; weatherInfo = loadWeather(city); weatherLoading = false; delay(30 * 60 * 1000L) }
+        while (true) {
+            weatherLoading = true
+            val key = if (weatherSource == "yandex") yandexWeatherKey else googleWeatherKey
+            if (weatherSource != "openmeteo" && key.isBlank()) {
+                weatherInfo = null
+                weatherError = "Добавь API-ключ в настройках погоды"
+            } else {
+                weatherInfo = loadWeather(city, weatherSource, key)
+                weatherError = if (weatherInfo == null) "Не удалось получить погоду. Проверь ключ и интернет." else null
+            }
+            weatherLoading = false
+            delay(30 * 60 * 1000L)
+        }
     }
     fun requestWeatherWidget() { if (weatherCityName.isBlank()) { pendingWeatherWidget = true; weatherCityDialog = true } else addOwnWidget("weather") }
     DisposableEffect(appWidgetHost) {
@@ -1625,6 +1672,30 @@ private fun ProstoContent(
                                 Text("Погода", style = MaterialTheme.typography.titleLarge, color = Purple)
                                 Text(if (weatherCityName.isBlank()) "Город не выбран" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 OutlinedButton(onClick = { weatherCityDialog = true }) { Text("Выбрать город") }
+                                Text("Источник погоды", style = MaterialTheme.typography.titleMedium)
+                                listOf("openmeteo" to "Open-Meteo (без ключа)", "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->
+                                    Row(Modifier.fillMaxWidth().clickable {
+                                        weatherSource = value
+                                        prefs.edit().putString("weather_source", value).apply()
+                                    }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(selected = weatherSource == value, onClick = {
+                                            weatherSource = value
+                                            prefs.edit().putString("weather_source", value).apply()
+                                        })
+                                        Text(label)
+                                    }
+                                }
+                                if (weatherSource == "yandex") {
+                                    OutlinedTextField(value = yandexWeatherKey, onValueChange = {
+                                        yandexWeatherKey = it; prefs.edit().putString("weather_yandex_key", it).apply()
+                                    }, label = { Text("Ключ API Яндекс Погоды") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                    Text("Ключ выдаётся в кабинете разработчика Яндекса.", style = MaterialTheme.typography.bodySmall)
+                                } else if (weatherSource == "google") {
+                                    OutlinedTextField(value = googleWeatherKey, onValueChange = {
+                                        googleWeatherKey = it; prefs.edit().putString("weather_google_key", it).apply()
+                                    }, label = { Text("Google Weather API key") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                    Text("Нужен ключ Google Maps Platform с включённым Weather API.", style = MaterialTheme.typography.bodySmall)
+                                }
                                 Divider()
                                 Text("Прозрачность папок", style = MaterialTheme.typography.titleMedium)
                                 Text("${(folderOpacity * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)

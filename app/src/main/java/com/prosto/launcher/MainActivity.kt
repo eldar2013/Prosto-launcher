@@ -77,6 +77,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -519,6 +520,7 @@ private fun ProstoContent(
 
     val slotRects = remember { mutableStateMapOf<Int, Rect>() }
     val blockedRects = remember { mutableStateMapOf<String, Rect>() }
+    var rootInputOrigin by remember { mutableStateOf(Offset.Zero) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var dropTargetIndex by remember { mutableStateOf<Int?>(null) }
     var dragPoint by remember { mutableStateOf(Offset.Zero) }
@@ -764,7 +766,9 @@ private fun ProstoContent(
     BackHandler(enabled = folderVisible) { folderVisible = false }
 
     Box(
-        Modifier.fillMaxSize().pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages) {
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { rootInputOrigin = it.positionInRoot() }
+            .pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages, rootInputOrigin) {
             detectTapGestures(
                 onTap = { point ->
                     val blocked = blockedRects.any { (key, rect) ->
@@ -782,17 +786,19 @@ private fun ProstoContent(
                     }
                 },
                 onLongPress = { point ->
-                    // Долгое нажатие на занятую ячейку принадлежит перетаскиванию иконки.
-                    // Не открываем панель редактирования поверх жеста перемещения.
+                    // PointerInput получает координаты относительно своего Box, а boundsInRoot —
+                    // относительно Compose root. Сначала переводим точку нажатия в ту же систему.
+                    val pointInRoot = point + rootInputOrigin
+                    // Долгое нажатие на иконку/папку оставляем только обработчику перетаскивания.
                     val occupiedWorkspace = slotRects.any { (index, rect) ->
-                        rect.contains(point) && workspacePackages.getOrNull(index).orEmpty().isNotBlank()
+                        rect.contains(pointInRoot) && workspacePackages.getOrNull(index).orEmpty().isNotBlank()
                     }
                     val occupiedDock = blockedRects.any { (key, rect) ->
                         key.startsWith("dock-") &&
                             dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null &&
-                            rect.contains(point)
+                            rect.contains(pointInRoot)
                     }
-                    val onDrawerButton = blockedRects["drawer-button"]?.contains(point) == true
+                    val onDrawerButton = blockedRects["drawer-button"]?.contains(pointInRoot) == true
                     if (!occupiedWorkspace && !occupiedDock && !onDrawerButton && !drawerOpen && !folderVisible) {
                         workspaceEditMode = true
                         quickMenuOpen = false

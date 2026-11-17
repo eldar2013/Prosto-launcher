@@ -336,6 +336,7 @@ private fun ProstoContent(
     var yandexWeatherKey by remember { mutableStateOf(prefs.getString("weather_yandex_key", "") ?: "") }
     var googleWeatherKey by remember { mutableStateOf(prefs.getString("weather_google_key", "") ?: "") }
     var weatherError by remember { mutableStateOf<String?>(null) }
+    var weatherRefreshToken by remember { mutableStateOf(0) }
     LaunchedEffect(weatherCityName, weatherSource, yandexWeatherKey, googleWeatherKey, weatherRefreshToken) {
         weatherInfo = null; weatherError = null
         val city = russianWeatherCities.firstOrNull { it.name == weatherCityName } ?: return@LaunchedEffect
@@ -480,7 +481,6 @@ private fun ProstoContent(
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var appLanguage by remember { mutableStateOf(prefs.getString("app_language", "ru") ?: "ru") }
-    var weatherRefreshToken by remember { mutableStateOf(0) }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var workspaceEditMode by remember { mutableStateOf(false) }

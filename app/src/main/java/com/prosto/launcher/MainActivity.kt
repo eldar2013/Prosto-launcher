@@ -1971,13 +1971,7 @@ private fun AnalogClockWidget(modifier: Modifier = Modifier) {
             delay(1000)
         }
     }
-    Surface(
-        modifier = modifier,
-        shape = CircleShape,
-        color = Color(0xFF171326),
-        border = BorderStroke(2.dp, Purple)
-    ) {
-        androidx.compose.foundation.Canvas(Modifier.fillMaxSize().padding(8.dp)) {
+    androidx.compose.foundation.Canvas(modifier.fillMaxSize().padding(8.dp)) {
             val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
             val radius = size.minDimension * 0.44f
             drawCircle(color = Lavender, radius = radius, center = center,
@@ -2011,7 +2005,6 @@ private fun AnalogClockWidget(modifier: Modifier = Modifier) {
             hand(minute, 60f, 0.76f, 2.8f, Lavender)
             hand(seconds, 60f, 0.84f, 1.2f, Purple)
             drawCircle(Purple, radius = 4.dp.toPx(), center = center)
-        }
     }
 }
 

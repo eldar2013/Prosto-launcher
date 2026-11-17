@@ -1141,8 +1141,8 @@ private fun ProstoContent(
                             }
                         }
                         Box(
-                            modifier = widgetModifier.pointerInput(widget.id) {
-                                detectDragGestures(
+                            modifier = widgetModifier.pointerInput(widget.id, workspacePackages) {
+                                detectDragGesturesAfterLongPress(
                                     onDragStart = { draggingWidget = true },
                                     onDragEnd = { draggingWidget = false },
                                     onDragCancel = { draggingWidget = false },
@@ -1150,15 +1150,27 @@ private fun ProstoContent(
                                         change.consume()
                                         val density = this.density
                                         val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
-                                            ?: return@detectDragGestures
-                                        val candidate = current.copy(
-                                            x = (current.x + drag.x / density)
-                                                .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f)),
-                                            y = (current.y + drag.y / density)
-                                                .coerceIn(0f, (586f - current.height).coerceAtLeast(0f))
-                                        )
+                                            ?: return@detectDragGesturesAfterLongPress
+                                        val rawX = current.x + drag.x / density
+                                        val rawY = current.y + drag.y / density
+                                        val snappedX = (kotlin.math.round(rawX / gridCellPitch) * gridCellPitch)
+                                            .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f))
+                                        val snappedY = (kotlin.math.round(rawY / 98f) * 98f)
+                                            .coerceIn(0f, (586f - current.height).coerceAtLeast(0f))
+                                        val candidate = current.copy(x = snappedX, y = snappedY)
                                         val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }
-                                        if (others.none { widgetsOverlap(candidate, it) }) {
+                                        val coversApp = workspacePackages.indices.any { index ->
+                                            val pkg = workspacePackages.getOrNull(index).orEmpty()
+                                            if (pkg.isBlank()) false else {
+                                                val cellX = (index % 4) * gridCellPitch
+                                                val cellY = (index / 4) * 98f
+                                                candidate.x < cellX + gridCellPitch &&
+                                                    candidate.x + candidate.width > cellX &&
+                                                    candidate.y < cellY + 98f &&
+                                                    candidate.y + candidate.height > cellY
+                                            }
+                                        }
+                                        if (others.none { widgetsOverlap(candidate, it) } && !coversApp) {
                                             saveWorkspaceWidgets(latestWorkspaceWidgets.value.map {
                                                 if (it.id == widget.id) candidate else it
                                             })
@@ -1202,7 +1214,7 @@ private fun ProstoContent(
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
                                     when (widget.type) {
                                         "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
-                                        "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, Modifier.fillMaxSize())
+                                        "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, weatherError, Modifier.fillMaxSize())
                                         "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
                                         "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
                                             Box(contentAlignment = Alignment.Center) {
@@ -2022,13 +2034,13 @@ private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier
 }
 
 @Composable
-private fun WeatherWidget(cityName: String, weather: WeatherInfo?, loading: Boolean, modifier: Modifier = Modifier) {
+private fun WeatherWidget(cityName: String, weather: WeatherInfo?, loading: Boolean, error: String?, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxSize().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         Text(weather?.emoji ?: "🌤️", fontSize = 48.sp); Spacer(Modifier.width(12.dp))
         Column {
             Text(weather?.let { "${if (it.temperature > 0) "+" else ""}${it.temperature}°" } ?: "—°", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Light)
             Text(weather?.description ?: if (loading) "Загрузка..." else "Нет данных", color = Color.White.copy(alpha = 0.92f), fontSize = 15.sp)
-            Text(cityName, color = Color.White.copy(alpha = 0.75f), fontSize = 12.sp)
+            Text(error ?: cityName, color = Color.White.copy(alpha = 0.75f), fontSize = if (error == null) 12.sp else 10.sp, maxLines = 2)
         }
     }
 }

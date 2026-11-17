@@ -1353,7 +1353,7 @@ private fun ProstoContent(
                     )
                 )
                 Text(
-                    "Зажми приложение, чтобы открыть меню действий",
+                    tr("Зажми приложение, чтобы открыть меню действий", appLanguage),
                     color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 10.dp)
                 )
@@ -1680,21 +1680,21 @@ private fun ProstoContent(
                                 }
                                 Divider()
                                 Text(tr("Тема", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                ThemeRow("System", themeChoice == LauncherTheme.SYSTEM) { onThemeChange(LauncherTheme.SYSTEM) }
-                                ThemeRow("Light", themeChoice == LauncherTheme.LIGHT) { onThemeChange(LauncherTheme.LIGHT) }
-                                ThemeRow("Dark", themeChoice == LauncherTheme.DARK) { onThemeChange(LauncherTheme.DARK) }
+                                ThemeRow(tr("Системная", appLanguage), themeChoice == LauncherTheme.SYSTEM) { onThemeChange(LauncherTheme.SYSTEM) }
+                                ThemeRow(tr("Светлая", appLanguage), themeChoice == LauncherTheme.LIGHT) { onThemeChange(LauncherTheme.LIGHT) }
+                                ThemeRow(tr("Тёмная", appLanguage), themeChoice == LauncherTheme.DARK) { onThemeChange(LauncherTheme.DARK) }
                             }
                             item {
                                 Divider()
                                 Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 IconShapeChoice.values().forEach { choice ->
                                     val label = when (choice) {
-                                        IconShapeChoice.CIRCLE -> "Circle — круг"
-                                        IconShapeChoice.SQUARE -> "Square — квадрат"
-                                        IconShapeChoice.TRIANGLE -> "Triangle — треугольник"
-                                        IconShapeChoice.COOKIE_12 -> "12-sided cookie — 12 сторон"
-                                        IconShapeChoice.SOFT_BURST -> "Soft burst — мягкая звезда"
-                                        IconShapeChoice.CLOVER_4 -> "4-leaf clover — клевер"
+                                        IconShapeChoice.CIRCLE -> "Circle"
+                                        IconShapeChoice.SQUARE -> "Square"
+                                        IconShapeChoice.TRIANGLE -> "Triangle"
+                                        IconShapeChoice.COOKIE_12 -> "12-sided cookie"
+                                        IconShapeChoice.SOFT_BURST -> "Soft burst"
+                                        IconShapeChoice.CLOVER_4 -> "4-leaf clover"
                                     }
                                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                         .clickable {
@@ -1717,7 +1717,7 @@ private fun ProstoContent(
                                 Text(if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else if (appLanguage == "en") "City: $weatherCityName" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
                                 Text(tr("Источник погоды", appLanguage), style = MaterialTheme.typography.titleMedium)
-                                listOf("openmeteo" to "Open-Meteo (без ключа)", "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->
+                                listOf("openmeteo" to (if (appLanguage == "en") "Open-Meteo (no key required)" else "Open-Meteo (без ключа)"), "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->
                                     Row(Modifier.fillMaxWidth().clickable {
                                         weatherSource = value
                                         prefs.edit().putString("weather_source", value).apply()
@@ -2010,6 +2010,13 @@ private fun tr(value: String, language: String): String {
     return when (value) {
         "Настройки лаунчера" -> "Launcher settings"
         "Готово" -> "Done"
+        "Новый рабочий стол" -> "New home screen"
+        "В нижн. панель" -> "Add to dock"
+        "Убрать с главного экрана" -> "Remove from home screen"
+        "Зажми приложение, чтобы открыть меню действий" -> "Long-press an app to open its action menu"
+        "Системная" -> "System"
+        "Светлая" -> "Light"
+        "Тёмная" -> "Dark"
         "Тема" -> "Theme"
         "Настройка иконок" -> "Icon settings"
         "Погода" -> "Weather"
@@ -2053,9 +2060,6 @@ private fun tr(value: String, language: String): String {
         "Удалить виджет" -> "Remove widget"
         "Настройки иконок" -> "Icon settings"
         "Язык" -> "Language"
-        "System" -> "System"
-        "Light" -> "Light"
-        "Dark" -> "Dark"
         "Удалить этот экран" -> "Delete this screen"
         "Удалить рабочий стол?" -> "Delete this home screen?"
         "Приложения и виджеты с этого рабочего стола будут удалены с него." -> "Apps and widgets on this home screen will be removed from it."

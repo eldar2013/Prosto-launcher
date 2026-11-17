@@ -336,7 +336,7 @@ private fun ProstoContent(
     var yandexWeatherKey by remember { mutableStateOf(prefs.getString("weather_yandex_key", "") ?: "") }
     var googleWeatherKey by remember { mutableStateOf(prefs.getString("weather_google_key", "") ?: "") }
     var weatherError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(weatherCityName, weatherSource, yandexWeatherKey, googleWeatherKey) {
+    LaunchedEffect(weatherCityName, weatherSource, yandexWeatherKey, googleWeatherKey, weatherRefreshToken) {
         weatherInfo = null; weatherError = null
         val city = russianWeatherCities.firstOrNull { it.name == weatherCityName } ?: return@LaunchedEffect
         while (true) {
@@ -479,6 +479,8 @@ private fun ProstoContent(
     var search by remember { mutableStateOf("") }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var appLanguage by remember { mutableStateOf(prefs.getString("app_language", "ru") ?: "ru") }
+    var weatherRefreshToken by remember { mutableIntStateOf(0) }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var workspaceEditMode by remember { mutableStateOf(false) }
@@ -1217,7 +1219,7 @@ private fun ProstoContent(
                                 ) {
                                     Spacer(Modifier.weight(1f))
                                     if (resizingWidgetId == widget.id) TextButton(onClick = { resizingWidgetId = null }) {
-                                        Text("Готово", color = Color.White, fontSize = 10.sp)
+                                        Text(tr("Готово", appLanguage), color = Color.White, fontSize = 10.sp)
                                     }
 
                                 }
@@ -1250,7 +1252,7 @@ private fun ProstoContent(
                                                 },
                                                 update = { /* View is initialized once in factory; avoid re-binding provider on every recomposition. */ },
                                                 modifier = Modifier.fillMaxSize()
-                                            ) else Text("Виджет недоступен", color = Color.White)
+                                            ) else Text(tr("Виджет недоступен", appLanguage), color = Color.White)
                                         }
                                     }
                                 }
@@ -1260,7 +1262,7 @@ private fun ProstoContent(
                         Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(24.dp)
                             .clip(CircleShape).background(Color(0xAA171326))
                             .clickable { selectedWorkspaceWidget = widget.id }, contentAlignment = Alignment.Center) {
-                            Text("⋮", color = Color.White, fontSize = 18.sp)
+                            Text(tr("⋮", appLanguage), color = Color.White, fontSize = 18.sp)
                         }
                         if (resizingWidgetId == widget.id) {
                             WidgetResizeKnob(Modifier.align(Alignment.CenterStart), "left", gridCellPitch, resizeBy)
@@ -1337,12 +1339,12 @@ private fun ProstoContent(
         ) {
             Column(Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f)).padding(18.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Все приложения", color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { drawerOpen = false }) { Text("Готово", color = Lavender) }
+                    Text(tr("Все приложения", appLanguage), color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { drawerOpen = false }) { Text(tr("Готово", appLanguage), color = Lavender) }
                 }
                 OutlinedTextField(
                     value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true, shape = RoundedCornerShape(28.dp), placeholder = { Text("Поиск приложений") },
+                    singleLine = true, shape = RoundedCornerShape(28.dp), placeholder = { Text(tr("Поиск приложений", appLanguage)) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White, unfocusedTextColor = Color.White,
@@ -1384,13 +1386,19 @@ private fun ProstoContent(
         selectedWorkspaceWidget?.let { widgetId ->
             AlertDialog(
                 onDismissRequest = { selectedWorkspaceWidget = null },
-                title = { Text("Виджет") },
-                text = { Text("Что сделать с виджетом?") },
+                title = { Text(tr("Виджет", appLanguage)) },
+                text = { Text(tr("Что сделать с виджетом?", appLanguage)) },
                 confirmButton = {
+                    if (workspaceWidgets.firstOrNull { it.id == widgetId }?.type == "weather") {
+                        TextButton(onClick = {
+                            weatherRefreshToken++
+                            selectedWorkspaceWidget = null
+                        }) { Text(tr("Обновить погоду", appLanguage)) }
+                    }
                     TextButton(onClick = {
                         resizingWidgetId = widgetId
                         selectedWorkspaceWidget = null
-                    }) { Text("Изменить размер") }
+                    }) { Text(tr("Изменить размер", appLanguage)) }
                 },
                 dismissButton = {
                     Row {
@@ -1403,8 +1411,8 @@ private fun ProstoContent(
                             }
                             saveWorkspaceWidgets(workspaceWidgets.filterNot { it.id == widgetId })
                             selectedWorkspaceWidget = null
-                        }) { Text("Убрать виджет", color = MaterialTheme.colorScheme.error) }
-                        TextButton(onClick = { selectedWorkspaceWidget = null }) { Text("Отмена") }
+                        }) { Text(tr("Убрать виджет", appLanguage), color = MaterialTheme.colorScheme.error) }
+                        TextButton(onClick = { selectedWorkspaceWidget = null }) { Text(tr("Отмена", appLanguage)) }
                     }
                 }
             )
@@ -1421,7 +1429,7 @@ private fun ProstoContent(
                             TextButton(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = { addToWorkspace(app.packageName); selectedApp = null; drawerOpen = false }
-                            ) { Text("На главный экран", modifier = Modifier.fillMaxWidth()) }
+                            ) { Text(tr("На главный экран", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         } else {
                             TextButton(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1431,14 +1439,14 @@ private fun ProstoContent(
                                     Toast.makeText(context, "Убрано с главного экрана", Toast.LENGTH_SHORT).show()
                                 }
                             ) {
-                                Text("Убрать с главного экрана", color = MaterialTheme.colorScheme.error,
+                                Text(tr("Убрать с главного экрана", appLanguage), color = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.fillMaxWidth())
                             }
                         }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = { addToDock(app.packageName); selectedApp = null; drawerOpen = false }
-                        ) { Text("В нижн. панель", modifier = Modifier.fillMaxWidth()) }
+                        ) { Text(tr("В нижн. панель", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
@@ -1450,7 +1458,7 @@ private fun ProstoContent(
                                     ))
                                 }
                             }
-                        ) { Text("О приложении", modifier = Modifier.fillMaxWidth()) }
+                        ) { Text(tr("О приложении", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
@@ -1467,11 +1475,11 @@ private fun ProstoContent(
                                 }
                             }
                         ) {
-                            Text("Удалить", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                            Text(tr("Удалить", appLanguage), color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text(tr("Закрыть", appLanguage)) } }
             )
         }
 
@@ -1492,27 +1500,27 @@ private fun ProstoContent(
                     widgetSourceOpen = true
                 }) {
                     Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Text("▦", color = Color.White, fontSize = 28.sp) }
+                        Box(contentAlignment = Alignment.Center) { Text(tr("▦", appLanguage), color = Color.White, fontSize = 28.sp) }
                     }
-                    Text("Виджеты", color = Color.White, fontSize = 12.sp, maxLines = 1)
+                    Text(tr("Виджеты", appLanguage), color = Color.White, fontSize = 12.sp, maxLines = 1)
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
                     addWorkspacePage()
                     workspaceEditMode = false
                 }) {
                     Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Text("+", color = Color.White, fontSize = 34.sp) }
+                        Box(contentAlignment = Alignment.Center) { Text(tr("+", appLanguage), color = Color.White, fontSize = 34.sp) }
                     }
-                    Text("Новый рабочий стол", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(tr("Новый рабочий стол", appLanguage), color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f).clickable {
                     workspaceEditMode = false
                     settingsOpen = true
                 }) {
                     Surface(shape = CircleShape, color = Color.White.copy(alpha = 0.16f), modifier = Modifier.size(58.dp)) {
-                        Box(contentAlignment = Alignment.Center) { Text("⚙", color = Color.White, fontSize = 28.sp) }
+                        Box(contentAlignment = Alignment.Center) { Text(tr("⚙", appLanguage), color = Color.White, fontSize = 28.sp) }
                     }
-                    Text("Настройки лаунчера", color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(tr("Настройки лаунчера", appLanguage), color = Color.White, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -1520,35 +1528,35 @@ private fun ProstoContent(
             TextButton(
                 onClick = { confirmDeleteWorkspacePage = true },
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 34.dp, end = 18.dp)
-            ) { Text("Удалить этот экран", color = Color.White) }
+            ) { Text(tr("Удалить этот экран", appLanguage), color = Color.White) }
         }
         if (confirmDeleteWorkspacePage) {
             AlertDialog(
                 onDismissRequest = { confirmDeleteWorkspacePage = false },
-                title = { Text("Удалить рабочий стол?") },
-                text = { Text("Приложения и виджеты с этого рабочего стола будут удалены с него.") },
-                confirmButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false; deleteCurrentWorkspacePage() }) { Text("Удалить") } },
-                dismissButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false }) { Text("Отмена") } }
+                title = { Text(tr("Удалить рабочий стол?", appLanguage)) },
+                text = { Text(tr("Приложения и виджеты с этого рабочего стола будут удалены с него.", appLanguage)) },
+                confirmButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false; deleteCurrentWorkspacePage() }) { Text(tr("Удалить", appLanguage)) } },
+                dismissButton = { TextButton(onClick = { confirmDeleteWorkspacePage = false }) { Text(tr("Отмена", appLanguage)) } }
             )
         }
 
 
         if (weatherCityDialog) {
-            AlertDialog(onDismissRequest = { weatherCityDialog = false; pendingWeatherWidget = false }, title = { Text("Выбери город") },
+            AlertDialog(onDismissRequest = { weatherCityDialog = false; pendingWeatherWidget = false }, title = { Text(tr("Выбери город", appLanguage)) },
                 text = { LazyColumn(Modifier.heightIn(max = 420.dp)) { lazyItems(russianWeatherCities) { city ->
                     Text(city.name, modifier = Modifier.fillMaxWidth().clickable {
                         weatherCityName = city.name; prefs.edit().putString("weather_city_name", city.name).apply(); weatherCityDialog = false
                         if (pendingWeatherWidget) { pendingWeatherWidget = false; addOwnWidget("weather") }
                     }.padding(vertical = 12.dp, horizontal = 8.dp))
-                } } }, confirmButton = { TextButton(onClick = { weatherCityDialog = false; pendingWeatherWidget = false }) { Text("Отмена") } })
+                } } }, confirmButton = { TextButton(onClick = { weatherCityDialog = false; pendingWeatherWidget = false }) { Text(tr("Отмена", appLanguage)) } })
         }
         if (widgetSourceOpen) {
             AlertDialog(
                 onDismissRequest = { widgetSourceOpen = false },
-                title = { Text("Добавить виджет") },
+                title = { Text(tr("Добавить виджет", appLanguage)) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("Часы и дата", color = Purple, fontWeight = FontWeight.Bold)
+                        Text(tr("Часы и дата", appLanguage), color = Purple, fontWeight = FontWeight.Bold)
                         listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата", "weather" to "Погода").forEach { (type, label) ->
                             Text(label, modifier = Modifier.fillMaxWidth().clickable {
                                 if (type == "weather") requestWeatherWidget() else addOwnWidget(type)
@@ -1556,7 +1564,7 @@ private fun ProstoContent(
                             }.padding(10.dp))
                         }
                         Divider()
-                        Text("Другие", modifier = Modifier.fillMaxWidth().clickable {
+                        Text(tr("Другие", appLanguage), modifier = Modifier.fillMaxWidth().clickable {
                             widgetSourceOpen = false
                             val id = appWidgetHost.allocateAppWidgetId()
                             pendingPickId = id
@@ -1565,7 +1573,7 @@ private fun ProstoContent(
                         }.padding(10.dp))
                     }
                 },
-                confirmButton = { TextButton(onClick = { widgetSourceOpen = false }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { widgetSourceOpen = false }) { Text(tr("Закрыть", appLanguage)) } }
             )
         }
 
@@ -1577,19 +1585,19 @@ private fun ProstoContent(
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Виджеты", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { widgetsOpen = false }) { Text("Готово") }
+                            Text(tr("Виджеты", appLanguage), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { widgetsOpen = false }) { Text(tr("Готово", appLanguage)) }
                         }
-                        Text("Часы и дата", style = MaterialTheme.typography.titleMedium, color = Purple)
+                        Text(tr("Часы и дата", appLanguage), style = MaterialTheme.typography.titleMedium, color = Purple)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = { addOwnWidget("digital"); widgetsOpen = false }) { Text("Часы") }
-                            FilledTonalButton(onClick = { addOwnWidget("analog"); widgetsOpen = false }) { Text("Аналоговые") }
-                            FilledTonalButton(onClick = { addOwnWidget("date"); widgetsOpen = false }) { Text("Дата") }
-                            FilledTonalButton(onClick = { requestWeatherWidget(); widgetsOpen = false }) { Text("Погода") }
+                            FilledTonalButton(onClick = { addOwnWidget("digital"); widgetsOpen = false }) { Text(tr("Часы", appLanguage)) }
+                            FilledTonalButton(onClick = { addOwnWidget("analog"); widgetsOpen = false }) { Text(tr("Аналоговые", appLanguage)) }
+                            FilledTonalButton(onClick = { addOwnWidget("date"); widgetsOpen = false }) { Text(tr("Дата", appLanguage)) }
+                            FilledTonalButton(onClick = { requestWeatherWidget(); widgetsOpen = false }) { Text(tr("Погода", appLanguage)) }
                         }
                         Spacer(Modifier.height(18.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Другие виджеты", style = MaterialTheme.typography.titleMedium,
+                            Text(tr("Другие виджеты", appLanguage), style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.weight(1f))
                             FilledTonalButton(onClick = {
                                 val id = appWidgetHost.allocateAppWidgetId()
@@ -1599,9 +1607,9 @@ private fun ProstoContent(
                                 }
                                 runCatching { widgetPicker.launch(pick) }
                                     .onFailure { appWidgetHost.deleteAppWidgetId(id) }
-                            }) { Text("Добавить") }
+                            }) { Text(tr("Добавить", appLanguage)) }
                         }
-                        Text("Выбери виджет из приложений, установленных на устройстве.",
+                        Text(tr("Выбери виджет из приложений, установленных на устройстве.", appLanguage),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                         LazyColumn(
@@ -1628,7 +1636,7 @@ private fun ProstoContent(
                                                 appWidgetHost.deleteAppWidgetId(widgetId)
                                                 hostedWidgetIds = hostedWidgetIds - widgetId
                                                 prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-                                            }) { Text("Удалить виджет", color = MaterialTheme.colorScheme.error) }
+                                            }) { Text(tr("Удалить виджет", appLanguage), color = MaterialTheme.colorScheme.error) }
                                         }
                                     }
                                 }
@@ -1647,9 +1655,9 @@ private fun ProstoContent(
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Настройки лаунчера", style = MaterialTheme.typography.headlineSmall,
+                            Text(tr("Настройки лаунчера", appLanguage), style = MaterialTheme.typography.headlineSmall,
                                 modifier = Modifier.weight(1f))
-                            TextButton(onClick = { settingsOpen = false }) { Text("Готово") }
+                            TextButton(onClick = { settingsOpen = false }) { Text(tr("Готово", appLanguage)) }
                         }
                         androidx.compose.foundation.lazy.LazyColumn(
                             modifier = Modifier.fillMaxSize(),
@@ -1657,14 +1665,28 @@ private fun ProstoContent(
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             item {
-                                Text("Тема", style = MaterialTheme.typography.titleLarge, color = Purple)
+                                Text(tr("Язык", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
+                                listOf("ru" to "Русский", "en" to "English").forEach { (code, label) ->
+                                    Row(Modifier.fillMaxWidth().clickable {
+                                        appLanguage = code
+                                        prefs.edit().putString("app_language", code).apply()
+                                    }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        RadioButton(selected = appLanguage == code, onClick = {
+                                            appLanguage = code
+                                            prefs.edit().putString("app_language", code).apply()
+                                        })
+                                        Text(label)
+                                    }
+                                }
+                                Divider()
+                                Text(tr("Тема", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 ThemeRow("System", themeChoice == LauncherTheme.SYSTEM) { onThemeChange(LauncherTheme.SYSTEM) }
                                 ThemeRow("Light", themeChoice == LauncherTheme.LIGHT) { onThemeChange(LauncherTheme.LIGHT) }
                                 ThemeRow("Dark", themeChoice == LauncherTheme.DARK) { onThemeChange(LauncherTheme.DARK) }
                             }
                             item {
                                 Divider()
-                                Text("Настройка иконок", style = MaterialTheme.typography.titleLarge, color = Purple)
+                                Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 IconShapeChoice.values().forEach { choice ->
                                     val label = when (choice) {
                                         IconShapeChoice.CIRCLE -> "Circle — круг"
@@ -1691,10 +1713,10 @@ private fun ProstoContent(
                                     }
                                 }
                                 Divider()
-                                Text("Погода", style = MaterialTheme.typography.titleLarge, color = Purple)
+                                Text(tr("Погода", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 Text(if (weatherCityName.isBlank()) "Город не выбран" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                OutlinedButton(onClick = { weatherCityDialog = true }) { Text("Выбрать город") }
-                                Text("Источник погоды", style = MaterialTheme.typography.titleMedium)
+                                OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
+                                Text(tr("Источник погоды", appLanguage), style = MaterialTheme.typography.titleMedium)
                                 listOf("openmeteo" to "Open-Meteo (без ключа)", "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->
                                     Row(Modifier.fillMaxWidth().clickable {
                                         weatherSource = value
@@ -1710,33 +1732,33 @@ private fun ProstoContent(
                                 if (weatherSource == "yandex") {
                                     OutlinedTextField(value = yandexWeatherKey, onValueChange = {
                                         yandexWeatherKey = it; prefs.edit().putString("weather_yandex_key", it).apply()
-                                    }, label = { Text("Ключ API Яндекс Погоды") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                                    Text("Ключ выдаётся в кабинете разработчика Яндекса.", style = MaterialTheme.typography.bodySmall)
+                                    }, label = { Text(tr("Ключ API Яндекс Погоды", appLanguage)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                    Text(tr("Ключ выдаётся в кабинете разработчика Яндекса.", appLanguage), style = MaterialTheme.typography.bodySmall)
                                 } else if (weatherSource == "google") {
                                     OutlinedTextField(value = googleWeatherKey, onValueChange = {
                                         googleWeatherKey = it; prefs.edit().putString("weather_google_key", it).apply()
-                                    }, label = { Text("Google Weather API key") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                                    Text("Нужен ключ Google Maps Platform с включённым Weather API.", style = MaterialTheme.typography.bodySmall)
+                                    }, label = { Text(tr("Google Weather API key", appLanguage)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                                    Text(tr("Нужен ключ Google Maps Platform с включённым Weather API.", appLanguage), style = MaterialTheme.typography.bodySmall)
                                 }
                                 Divider()
-                                Text("Прозрачность папок", style = MaterialTheme.typography.titleMedium)
-                                Text("${(folderOpacity * 100).toInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(tr("Прозрачность папок", appLanguage), style = MaterialTheme.typography.titleMedium)
+                                Text(tr("${(folderOpacity * 100).toInt()}%", appLanguage), color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Slider(value = folderOpacity, onValueChange = {
                                     folderOpacity = it
                                     prefs.edit().putFloat("folder_opacity", it).apply()
                                 }, valueRange = 0.15f..1f)
                                 Divider()
-                                Text("Обои", style = MaterialTheme.typography.titleMedium)
-                                Text("Выбери изображение из галереи или верни стандартные обои.",
+                                Text(tr("Обои", appLanguage), style = MaterialTheme.typography.titleMedium)
+                                Text(tr("Выбери изображение из галереи или верни стандартные обои.", appLanguage),
                                     style = MaterialTheme.typography.bodySmall)
                                 OutlinedButton(onClick = { wallpaperPicker.launch(arrayOf("image/*")) }) {
-                                    Text("Выбрать обои из галереи")
+                                    Text(tr("Выбрать обои из галереи", appLanguage))
                                 }
                                 if (wallpaperUri != null) {
                                     TextButton(onClick = {
                                         wallpaperUri = null
                                         prefs.edit().remove("wallpaper_uri").apply()
-                                    }) { Text("Вернуть стандартные обои") }
+                                    }) { Text(tr("Вернуть стандартные обои", appLanguage)) }
                                 }
                             }
                         }
@@ -1852,7 +1874,7 @@ private fun ProstoContent(
                                 folderMenuKey = null
                                 openFolder(key)
                             }
-                        ) { Text("Открыть", modifier = Modifier.fillMaxWidth()) }
+                        ) { Text(tr("Открыть", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
@@ -1860,7 +1882,7 @@ private fun ProstoContent(
                                 renameText = folderNames[key].orEmpty()
                                 renamingFolder = key
                             }
-                        ) { Text("Переименовать", modifier = Modifier.fillMaxWidth()) }
+                        ) { Text(tr("Переименовать", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         TextButton(
                             modifier = Modifier.fillMaxWidth(),
                             onClick = {
@@ -1869,11 +1891,11 @@ private fun ProstoContent(
                                 Toast.makeText(context, "Папка удалена", Toast.LENGTH_SHORT).show()
                             }
                         ) {
-                            Text("Удалить папку", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                            Text(tr("Удалить папку", appLanguage), color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { folderMenuKey = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { folderMenuKey = null }) { Text(tr("Закрыть", appLanguage)) } }
             )
         }
 
@@ -1883,13 +1905,13 @@ private fun ProstoContent(
             LaunchedEffect(key) { runCatching { focusRequester.requestFocus() } }
             AlertDialog(
                 onDismissRequest = { renamingFolder = null },
-                title = { Text("Переименовать папку") },
+                title = { Text(tr("Переименовать папку", appLanguage)) },
                 text = {
                     OutlinedTextField(
                         value = renameText,
                         onValueChange = { renameText = it.take(24) },
                         singleLine = true,
-                        placeholder = { Text("Папка") },
+                        placeholder = { Text(tr("Папка", appLanguage)) },
                         modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
                     )
                 },
@@ -1897,9 +1919,9 @@ private fun ProstoContent(
                     TextButton(onClick = {
                         renameFolder(key, renameText)
                         renamingFolder = null
-                    }) { Text("Сохранить") }
+                    }) { Text(tr("Сохранить", appLanguage)) }
                 },
-                dismissButton = { TextButton(onClick = { renamingFolder = null }) { Text("Отмена") } }
+                dismissButton = { TextButton(onClick = { renamingFolder = null }) { Text(tr("Отмена", appLanguage)) } }
             )
         }
 
@@ -1923,7 +1945,7 @@ private fun ProstoContent(
                                 val dissolved = takeOutOfFolder(folderKey, pkg, placeOnDesktop = true)
                                 if (dissolved) folderVisible = false
                             }
-                        ) { Text("Убрать из папки", modifier = Modifier.fillMaxWidth()) }
+                        ) { Text(tr("Убрать из папки", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         otherFolders.forEachIndexed { i, otherKey ->
                             val title = otherTitles[i]
                             val label = if (otherTitles.count { it == title } > 1) {
@@ -1938,11 +1960,11 @@ private fun ProstoContent(
                                     if (willDissolve) folderVisible = false
                                     Toast.makeText(context, "Перемещено в «$title»", Toast.LENGTH_SHORT).show()
                                 }
-                            ) { Text("Переместить в «$label»", modifier = Modifier.fillMaxWidth()) }
+                            ) { Text(tr("Переместить в «$label»", appLanguage), modifier = Modifier.fillMaxWidth()) }
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { memberMenu = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { memberMenu = null }) { Text(tr("Закрыть", appLanguage)) } }
             )
         }
 
@@ -1952,10 +1974,10 @@ private fun ProstoContent(
             val candidates = apps.filter { it.packageName !in inFolders }
             AlertDialog(
                 onDismissRequest = { addToFolderKey = null },
-                title = { Text("Добавить в папку") },
+                title = { Text(tr("Добавить в папку", appLanguage)) },
                 text = {
                     if (candidates.isEmpty()) {
-                        Text("Все приложения уже лежат в папках")
+                        Text(tr("Все приложения уже лежат в папках", appLanguage))
                     } else {
                         LazyColumn(
                             Modifier.heightIn(max = 380.dp),
@@ -1976,11 +1998,86 @@ private fun ProstoContent(
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { addToFolderKey = null }) { Text("Готово") } }
+                confirmButton = { TextButton(onClick = { addToFolderKey = null }) { Text(tr("Готово", appLanguage)) } }
             )
         }
     }
 }
+}
+
+private fun tr(value: String, language: String): String {
+    if (language != "en") return value
+    return when (value) {
+        "Настройки лаунчера" -> "Launcher settings"
+        "Готово" -> "Done"
+        "Тема" -> "Theme"
+        "Настройка иконок" -> "Icon settings"
+        "Погода" -> "Weather"
+        "Город не выбран" -> "No city selected"
+        "Выбрать город" -> "Choose city"
+        "Источник погоды" -> "Weather source"
+        "Яндекс Погода" -> "Yandex Weather"
+        "Google Weather" -> "Google Weather"
+        "без ключа" -> "no key required"
+        "Ключ API Яндекс Погоды" -> "Yandex Weather API key"
+        "Ключ выдаётся в кабинете разработчика Яндекса." -> "Get a key from the Yandex developer dashboard."
+        "Нужен ключ Google Maps Platform с включённым Weather API." -> "A Google Maps Platform key with Weather API enabled is required."
+        "Прозрачность папок" -> "Folder transparency"
+        "Обои" -> "Wallpaper"
+        "Выбери изображение из галереи или верни стандартные обои." -> "Choose an image from the gallery or restore the default wallpaper."
+        "Выбрать обои из галереи" -> "Choose wallpaper from gallery"
+        "Вернуть стандартные обои" -> "Restore default wallpaper"
+        "Виджет" -> "Widget"
+        "Что сделать с виджетом?" -> "What would you like to do with this widget?"
+        "Обновить погоду" -> "Refresh weather"
+        "Изменить размер" -> "Resize"
+        "Убрать виджет" -> "Remove widget"
+        "Отмена" -> "Cancel"
+        "На главный экран" -> "Add to home screen"
+        "О приложении" -> "App info"
+        "Все приложения" -> "All apps"
+        "Поиск приложений" -> "Search apps"
+        "Часы и дата" -> "Clock & date"
+        "Цифровые часы" -> "Digital clock"
+        "Аналоговые часы" -> "Analog clock"
+        "Дата" -> "Date"
+        "Другие" -> "Other"
+        "Другие виджеты" -> "Other widgets"
+        "Добавить" -> "Add"
+        "Добавить виджет" -> "Add widget"
+        "Закрыть" -> "Close"
+        "Выбери виджет из приложений, установленных на устройстве." -> "Choose a widget from apps installed on your device."
+        "Виджеты" -> "Widgets"
+        "Часы" -> "Clock"
+        "Аналоговые" -> "Analog"
+        "Удалить виджет" -> "Remove widget"
+        "Настройки иконок" -> "Icon settings"
+        "Язык" -> "Language"
+        "System" -> "System"
+        "Light" -> "Light"
+        "Dark" -> "Dark"
+        "Удалить этот экран" -> "Delete this screen"
+        "Удалить рабочий стол?" -> "Delete this home screen?"
+        "Приложения и виджеты с этого рабочего стола будут удалены с него." -> "Apps and widgets on this home screen will be removed from it."
+        "Выбрать" -> "Choose"
+        "Папка" -> "Folder"
+        "Переименовать" -> "Rename"
+        "Удалить" -> "Delete"
+        "Сохранить" -> "Save"
+        "Переместить" -> "Move"
+        "Настройки" -> "Settings"
+        "Добавлено" -> "Added"
+        "Нет данных" -> "No data"
+        "Загрузка..." -> "Loading..."
+        "Ясно" -> "Clear"
+        "Облачно" -> "Cloudy"
+        "Переменная облачность" -> "Partly cloudy"
+        "Дождь" -> "Rain"
+        "Снег" -> "Snow"
+        "Гроза" -> "Thunderstorm"
+        "Туман" -> "Fog"
+        else -> value
+    }
 }
 
 @Composable

@@ -75,6 +75,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -519,6 +520,7 @@ private fun ProstoContent(
     }
 
     val slotRects = remember { mutableStateMapOf<Int, Rect>() }
+    val slotCoordinates = remember { mutableStateMapOf<Int, LayoutCoordinates>() }
     val blockedRects = remember { mutableStateMapOf<String, Rect>() }
     var rootInputOrigin by remember { mutableStateOf(Offset.Zero) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
@@ -864,6 +866,7 @@ private fun ProstoContent(
                             .onGloballyPositioned { coordinates ->
                                 val rect = coordinates.boundsInRoot()
                                 slotRects[index] = rect
+                                slotCoordinates[index] = coordinates
                                 blockedRects["workspace-$index"] = rect
                             }
                             .pointerInput(index, workspacePackages) {
@@ -879,7 +882,9 @@ private fun ProstoContent(
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
-                                            if (rect != null) dragPoint = Offset(rect.left + start.x, rect.top + start.y)
+                                            dragPoint = slotCoordinates[index]?.localToRoot(start)
+                                                ?: rect?.let { Offset(it.left + start.x, it.top + start.y) }
+                                                ?: Offset.Zero
                                         }
                                     },
                                     onDrag = { change, _ ->
@@ -887,12 +892,16 @@ private fun ProstoContent(
                                             change.consume()
                                             if ((change.position - pressStart).getDistance() > 24f) movedFar = true
                                             val rect = slotRects[index]
-                                            if (rect != null) {
-                                                dragPoint = Offset(rect.left + change.position.x, rect.top + change.position.y)
-                                                dropTargetIndex = slotRects.entries.firstOrNull { (_, bounds) ->
-                                                    bounds.contains(dragPoint)
+                                            dragPoint = slotCoordinates[index]?.localToRoot(change.position)
+                                                ?: rect?.let { Offset(it.left + change.position.x, it.top + change.position.y) }
+                                                ?: dragPoint
+                                            dropTargetIndex = slotRects.entries
+                                                .filter { (_, bounds) -> bounds.contains(dragPoint) }
+                                                .minByOrNull { (_, bounds) ->
+                                                    val dx = bounds.center.x - dragPoint.x
+                                                    val dy = bounds.center.y - dragPoint.y
+                                                    dx * dx + dy * dy
                                                 }?.key
-                                            }
                                         }
                                     },
                                     onDragEnd = {

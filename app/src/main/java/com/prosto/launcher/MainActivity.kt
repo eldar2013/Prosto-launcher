@@ -1142,20 +1142,30 @@ private fun ProstoContent(
                         }
                         Box(
                             modifier = widgetModifier.pointerInput(widget.id, workspacePackages) {
+                                var originX = 0f
+                                var originY = 0f
+                                var totalX = 0f
+                                var totalY = 0f
                                 detectDragGesturesAfterLongPress(
-                                    onDragStart = { draggingWidget = true },
+                                    onDragStart = {
+                                        latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }?.let {
+                                            originX = it.x; originY = it.y
+                                        }
+                                        totalX = 0f; totalY = 0f
+                                        draggingWidget = true
+                                    },
                                     onDragEnd = { draggingWidget = false },
                                     onDragCancel = { draggingWidget = false },
                                     onDrag = { change, drag ->
                                         change.consume()
                                         val density = this.density
+                                        totalX += drag.x / density
+                                        totalY += drag.y / density
                                         val current = latestWorkspaceWidgets.value.firstOrNull { it.id == widget.id }
                                             ?: return@detectDragGesturesAfterLongPress
-                                        val rawX = current.x + drag.x / density
-                                        val rawY = current.y + drag.y / density
-                                        val snappedX = (kotlin.math.round(rawX / gridCellPitch) * gridCellPitch)
+                                        val snappedX = (kotlin.math.round((originX + totalX) / gridCellPitch) * gridCellPitch)
                                             .coerceIn(0f, (gridCellPitch * 4f - 4f - current.width).coerceAtLeast(0f))
-                                        val snappedY = (kotlin.math.round(rawY / 98f) * 98f)
+                                        val snappedY = (kotlin.math.round((originY + totalY) / 98f) * 98f)
                                             .coerceIn(0f, (586f - current.height).coerceAtLeast(0f))
                                         val candidate = current.copy(x = snappedX, y = snappedY)
                                         val others = latestWorkspaceWidgets.value.filterNot { it.id == widget.id }

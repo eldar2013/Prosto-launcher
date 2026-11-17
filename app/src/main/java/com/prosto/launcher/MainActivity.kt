@@ -480,7 +480,7 @@ private fun ProstoContent(
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var appLanguage by remember { mutableStateOf(prefs.getString("app_language", "ru") ?: "ru") }
-    var weatherRefreshToken by remember { mutableIntStateOf(0) }
+    var weatherRefreshToken by remember { mutableStateOf(0) }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var workspaceEditMode by remember { mutableStateOf(false) }
@@ -1714,7 +1714,7 @@ private fun ProstoContent(
                                 }
                                 Divider()
                                 Text(tr("Погода", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                Text(if (weatherCityName.isBlank()) "Город не выбран" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else if (appLanguage == "en") "City: $weatherCityName" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
                                 Text(tr("Источник погоды", appLanguage), style = MaterialTheme.typography.titleMedium)
                                 listOf("openmeteo" to "Open-Meteo (без ключа)", "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->

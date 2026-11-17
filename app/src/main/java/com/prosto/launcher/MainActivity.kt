@@ -784,25 +784,6 @@ private fun ProstoContent(
                         selectedWorkspaceWidget = null
                         resizingWidgetId = null
                     }
-                },
-                onLongPress = { point ->
-                    // PointerInput получает координаты относительно своего Box, а boundsInRoot —
-                    // относительно Compose root. Сначала переводим точку нажатия в ту же систему.
-                    val pointInRoot = point + rootInputOrigin
-                    // Долгое нажатие на иконку/папку оставляем только обработчику перетаскивания.
-                    val occupiedWorkspace = slotRects.any { (index, rect) ->
-                        rect.contains(pointInRoot) && workspacePackages.getOrNull(index).orEmpty().isNotBlank()
-                    }
-                    val occupiedDock = blockedRects.any { (key, rect) ->
-                        key.startsWith("dock-") &&
-                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null &&
-                            rect.contains(pointInRoot)
-                    }
-                    val onDrawerButton = blockedRects["drawer-button"]?.contains(pointInRoot) == true
-                    if (!occupiedWorkspace && !occupiedDock && !onDrawerButton && !drawerOpen && !folderVisible) {
-                        workspaceEditMode = true
-                        quickMenuOpen = false
-                    }
                 }
             )
         }
@@ -856,10 +837,21 @@ private fun ProstoContent(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                   for (gridCol in 0 until 4) {
                     val index = gridRow * 4 + gridCol
-                    Box(Modifier.weight(1f)) {
                     val pkg = workspacePackages.getOrNull(index).orEmpty()
                     val app = appMap[pkg]
                     val isFolder = pkg.startsWith("@folder@") && pkg in folderContents
+                    Box(
+                        Modifier.weight(1f).pointerInput(index, app, isFolder, drawerOpen, folderVisible) {
+                            if (app == null && !isFolder) {
+                                detectTapGestures(onLongPress = {
+                                    if (!drawerOpen && !folderVisible) {
+                                        workspaceEditMode = true
+                                        quickMenuOpen = false
+                                    }
+                                })
+                            }
+                        }
+                    ) {
                     Box(
                         Modifier.fillMaxWidth().height(86.dp)
                             .graphicsLayer {

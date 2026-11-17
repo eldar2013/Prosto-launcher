@@ -782,14 +782,21 @@ private fun ProstoContent(
                     }
                 },
                 onLongPress = { point ->
-                    val blocked = blockedRects.any { (key, rect) ->
-                        val occupiedWorkspace = key.startsWith("workspace-") &&
-                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
-                        val occupiedDock = key.startsWith("dock-") &&
-                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
-                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                    // Долгое нажатие на занятую ячейку принадлежит перетаскиванию иконки.
+                    // Не открываем панель редактирования поверх жеста перемещения.
+                    val occupiedWorkspace = slotRects.any { (index, rect) ->
+                        rect.contains(point) && workspacePackages.getOrNull(index).orEmpty().isNotBlank()
                     }
-                    if (!blocked && !drawerOpen && !folderVisible) { workspaceEditMode = true; quickMenuOpen = false }
+                    val occupiedDock = blockedRects.any { (key, rect) ->
+                        key.startsWith("dock-") &&
+                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null &&
+                            rect.contains(point)
+                    }
+                    val onDrawerButton = blockedRects["drawer-button"]?.contains(point) == true
+                    if (!occupiedWorkspace && !occupiedDock && !onDrawerButton && !drawerOpen && !folderVisible) {
+                        workspaceEditMode = true
+                        quickMenuOpen = false
+                    }
                 }
             )
         }
@@ -1175,13 +1182,6 @@ private fun ProstoContent(
         // Нижняя панель и точки страниц размещены в одном полноэкранном слое
         // поверх рабочего стола и привязаны к нижнему краю экрана.
         Box(Modifier.fillMaxSize()) {
-            // ВРЕМЕННАЯ диагностика: помогает понять, почему иконки/виджеты не видны.
-            Text(
-                "диагн.: приложений ${apps.size}, на столе ${workspacePackages.count { it.isNotBlank() }}, " +
-                    "виджетов ${workspaceWidgets.size}, стр. ${workspacePage + 1}/${workspacePageCount}",
-                fontSize = 9.sp, color = Lavender.copy(alpha = 0.8f),
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 6.dp, top = 30.dp)
-            )
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .padding(start = 16.dp, end = 16.dp, bottom = 18.dp, top = 8.dp),

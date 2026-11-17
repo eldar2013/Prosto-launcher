@@ -226,10 +226,10 @@ private fun ProstoContent(
     val appCellOccupied = remember { arrayOf<(Int) -> Boolean>({ false }) }
     fun nextWidgetPosition(page: Int, width: Float, height: Float): Pair<Float, Float>? {
         val maxWidth = gridCellPitch * 4f - 4f
-        val maxHeight = 478f
+        val maxHeight = 574f
         val safeWidth = width.coerceAtMost(maxWidth)
         val safeHeight = height.coerceAtMost(maxHeight)
-        for (row in 0..4) {
+        for (row in 0..5) {
             for (col in 0..3) {
                 val x = col * gridCellPitch
                 val y = row * 98f
@@ -239,7 +239,7 @@ private fun ProstoContent(
                         x < other.x + other.width && x + safeWidth > other.x &&
                         y < other.y + other.height && y + safeHeight > other.y
                 }
-                val coversApp = page == workspacePage && (0 until 20).any { idx ->
+                val coversApp = page == workspacePage && (0 until 24).any { idx ->
                     val cellLeft = (idx % 4) * gridCellPitch
                     val cellTop = (idx / 4) * 98f
                     appCellOccupied[0](idx) &&
@@ -420,15 +420,15 @@ private fun ProstoContent(
         mutableStateOf(
             run {
                 val pageKey = if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage"
-                val storedSlots = prefs.getString(pageKey, null)?.split("|")?.take(20).orEmpty()
+                val storedSlots = prefs.getString(pageKey, null)?.split("|")?.take(24).orEmpty()
                 // Старые версии могли оставить ключ workspace_slots пустым, хотя список
                 // workspace_apps_ordered ещё содержал приложения. Восстанавливаем их.
                 val fallback = if (workspacePage == 0) {
                     prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
-                        ?.take(20) ?: oldHome.drop(4).take(20)
+                        ?.take(24) ?: oldHome.drop(4).take(24)
                 } else emptyList()
                 val saved = if (storedSlots.any { it.isNotBlank() }) storedSlots else fallback
-                saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+                saved + List((24 - saved.size).coerceAtLeast(0)) { "" }
             }
         )
     }
@@ -530,8 +530,8 @@ private fun ProstoContent(
         prefs.edit().putString("dock_apps_ordered", dockPackages.joinToString("|")).apply()
     }
     fun saveWorkspace(updated: List<String>) {
-        workspacePackages = updated.take(20).let { slots ->
-            slots + List((20 - slots.size).coerceAtLeast(0)) { "" }
+        workspacePackages = updated.take(24).let { slots ->
+            slots + List((24 - slots.size).coerceAtLeast(0)) { "" }
         }
         prefs.edit()
             .putString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage",
@@ -546,13 +546,13 @@ private fun ProstoContent(
         if (target == workspacePage) return
         workspacePage = target
         val storedSlots = prefs.getString(if (target == 0) "workspace_slots" else "workspace_slots_$target", null)
-            ?.split("|").orEmpty().take(20)
+            ?.split("|").orEmpty().take(24)
         val fallback = if (target == 0) {
             prefs.getString("workspace_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }
-                ?.take(20) ?: oldHome.drop(4).take(20)
+                ?.take(24) ?: oldHome.drop(4).take(24)
         } else emptyList()
         val saved = if (storedSlots.any { it.isNotBlank() }) storedSlots else fallback
-        workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+        workspacePackages = saved + List((24 - saved.size).coerceAtLeast(0)) { "" }
         prefs.edit().putInt("workspace_current_page", target).apply()
     }
     fun addWorkspacePage() {
@@ -579,8 +579,8 @@ private fun ProstoContent(
         workspaceEditMode = false
         workspacePage = (removedPage - 1).coerceAtLeast(0)
         val saved = prefs.getString(if (workspacePage == 0) "workspace_slots" else "workspace_slots_$workspacePage", null)
-            ?.split("|").orEmpty().take(20)
-        workspacePackages = saved + List((20 - saved.size).coerceAtLeast(0)) { "" }
+            ?.split("|").orEmpty().take(24)
+        workspacePackages = saved + List((24 - saved.size).coerceAtLeast(0)) { "" }
         prefs.edit().putInt("workspace_current_page", workspacePage).apply()
     }
     fun addToWorkspace(pkg: String) {
@@ -827,13 +827,13 @@ private fun ProstoContent(
             // Виджеты рисуются отдельным слоем поверх сетки; даже повреждённая запись виджета
             // не должна делать приложения невидимыми или удалять их из сохранённых слотов.
             Box(Modifier.fillMaxSize()) {
-            // Обычная (не ленивая) сетка 4x5: все 20 ячеек всегда составляются и рисуются,
+            // Обычная (не ленивая) сетка 4x6: все 24 ячейки всегда составляются и рисуются,
             // поэтому добавленные приложения не могут «пропасть» из-за LazyVerticalGrid.
             Column(
                 modifier = Modifier.fillMaxSize().padding(top = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-              for (gridRow in 0 until 5) {
+              for (gridRow in 0 until 6) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                   for (gridCol in 0 until 4) {
                     val index = gridRow * 4 + gridCol
@@ -1045,14 +1045,14 @@ private fun ProstoContent(
                                     }
                                     "top" -> if (canH) {
                                         val wanted = (h - dy).coerceAtLeast(minH)
-                                        val snapped = ((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minH)
+                                        val snapped = ((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 6f) * 98f) - 12f).coerceAtLeast(minH)
                                         y = (current.y + current.height - snapped).coerceAtLeast(0f)
                                         h = current.y + current.height - y
                                     }
                                     "bottom" -> if (canH) {
                                         val wanted = (h + dy).coerceAtLeast(minH)
-                                        h = (((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 5f) * 98f) - 12f).coerceAtLeast(minH))
-                                        h = h.coerceAtMost(490f - y)
+                                        h = (((kotlin.math.round((wanted + 12f) / 98f).coerceIn(1f, 6f) * 98f) - 12f).coerceAtLeast(minH))
+                                        h = h.coerceAtMost(586f - y)
                                     }
                                 }
                                 val candidate = current.copy(x = x, y = y, width = w, height = h)

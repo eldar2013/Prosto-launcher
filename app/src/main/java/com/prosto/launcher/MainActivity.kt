@@ -111,16 +111,30 @@ private val russianWeatherCities = listOf(
 )
 private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: String): Pair<WeatherInfo?, String?> = withContext(Dispatchers.IO) {
  runCatching {
-  val connection = when (source) {
-   "yandex" -> URL("https://api.weather.yandex.ru/v2/informers?lat=${city.latitude}&lon=${city.longitude}&lang=ru_RU").openConnection().apply { setRequestProperty("X-Yandex-Weather-Key", apiKey) }
-   "google" -> URL("https://weather.googleapis.com/v1/currentConditions:lookup?key=$apiKey&location.latitude=${city.latitude}&location.longitude=${city.longitude}").openConnection()
-   else -> URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto").openConnection()
+  fun openWeatherConnection(): java.net.HttpURLConnection {
+   val connection = URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto").openConnection() as java.net.HttpURLConnection
+   connection.connectTimeout = 20000
+   connection.readTimeout = 20000
+   connection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (https://github.com/eldar2013/Prosto-launcher)")
+   return connection
   }
-  connection.connectTimeout = 20000; connection.readTimeout = 20000
-  connection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (weather widget)")
-  val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
-  when (source) {
-   "yandex" -> {
+  fun parseOpenMeteo(): WeatherInfo {
+   val json = JSONObject(openWeatherConnection().inputStream.bufferedReader().use { it.readText() })
+   val current = json.getJSONObject("current")
+   val code = current.getInt("weather_code")
+   val (description, emoji) = when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
+   return WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(), description, emoji)
+  }
+  if (source == "yandex" || source == "google") {
+   val connection = when (source) {
+    "yandex" -> URL("https://api.weather.yandex.ru/v2/informers?lat=${city.latitude}&lon=${city.longitude}&lang=ru_RU").openConnection().apply { setRequestProperty("X-Yandex-Weather-Key", apiKey) }
+    else -> URL("https://weather.googleapis.com/v1/currentConditions:lookup?key=$apiKey&location.latitude=${city.latitude}&location.longitude=${city.longitude}").openConnection()
+   }
+   connection.connectTimeout = 20000
+   connection.readTimeout = 20000
+   connection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (https://github.com/eldar2013/Prosto-launcher)")
+   val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
+   if (source == "yandex") {
     val fact = json.getJSONObject("fact")
     val condition = fact.optString("condition", "cloudy")
     val (description, emoji) = when {
@@ -134,20 +148,46 @@ private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: Strin
      else -> condition to "🌡️"
     }
     WeatherInfo(fact.getInt("temp"), description, emoji)
-   }
-   "google" -> {
+   } else {
     val current = json.getJSONObject("temperature").getDouble("degrees")
     val description = json.optJSONObject("weatherCondition")?.optJSONObject("description")?.optString("text") ?: "Погода"
     val lower = description.lowercase()
     val emoji = when { "rain" in lower || "дожд" in lower -> "🌧️"; "snow" in lower || "снег" in lower -> "❄️"; "thunder" in lower || "гроз" in lower -> "⛈️"; "cloud" in lower || "облач" in lower -> "☁️"; else -> "☀️" }
     WeatherInfo(kotlin.math.round(current).toInt(), description, emoji)
    }
-   else -> {
-    val current = json.getJSONObject("current"); val code = current.getInt("weather_code")
-    val (description, emoji) = when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
-    WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(), description, emoji)
+  } else {
+   // MET Norway: бесплатный глобальный прогноз, без API-ключа.
+   val metConnection = URL("https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${city.latitude}&lon=${city.longitude}").openConnection() as java.net.HttpURLConnection
+   metConnection.connectTimeout = 20000
+   metConnection.readTimeout = 20000
+   metConnection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (https://github.com/eldar2013/Prosto-launcher)")
+   val metJson = JSONObject(metConnection.inputStream.bufferedReader().use { it.readText() })
+   val first = metJson.getJSONObject("properties").getJSONArray("timeseries").getJSONObject(0).getJSONObject("data")
+   val temperature = first.getJSONObject("instant").getJSONObject("details").getDouble("air_temperature")
+   val next = first.optJSONObject("next_1_hours") ?: first.optJSONObject("next_6_hours")
+   val symbol = next?.optJSONObject("summary")?.optString("symbol_code").orEmpty().substringBefore("_")
+   val (description, emoji) = when {
+    symbol.startsWith("clearsky") -> "Ясно" to "☀️"
+    symbol.startsWith("fair") || symbol.startsWith("partlycloudy") -> "Переменная облачность" to "🌤️"
+    symbol.startsWith("cloudy") -> "Облачно" to "☁️"
+    symbol.startsWith("fog") -> "Туман" to "🌫️"
+    symbol.startsWith("rain") || symbol.startsWith("lightrain") || symbol.startsWith("heavyrain") || symbol.startsWith("sleet") -> "Дождь" to "🌧️"
+    symbol.startsWith("snow") -> "Снег" to "❄️"
+    symbol.startsWith("thunder") -> "Гроза" to "⛈️"
+    else -> "Погода" to "🌡️"
    }
+   WeatherInfo(kotlin.math.round(temperature).toInt(), description, emoji)
   }
+ }.recoverCatching {
+  // Резервный источник на случай недоступности MET Norway.
+  val connection = URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto").openConnection() as java.net.HttpURLConnection
+  connection.connectTimeout = 20000
+  connection.readTimeout = 20000
+  connection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (https://github.com/eldar2013/Prosto-launcher)")
+  val current = JSONObject(connection.inputStream.bufferedReader().use { it.readText() }).getJSONObject("current")
+  val code = current.getInt("weather_code")
+  val (description, emoji) = when(code) { 0->"Ясно" to "☀️"; 1,2->"Переменная облачность" to "🌤️"; 3->"Облачно" to "☁️"; 45,48->"Туман" to "🌫️"; in 51..67->"Дождь" to "🌧️"; in 71..77->"Снег" to "❄️"; in 80..82->"Ливень" to "🌦️"; in 85..86->"Снегопад" to "🌨️"; in 95..99->"Гроза" to "⛈️"; else->"Погода" to "🌡️" }
+  WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(), description, emoji)
  }.fold(onSuccess = { it to null }, onFailure = { error -> null to (error.message ?: error.javaClass.simpleName) })
 }
 
@@ -458,7 +498,7 @@ private fun ProstoContent(
             weatherInfo = result.first
             weatherError = result.second?.let { "Ошибка погоды: $it" }
             weatherLoading = false
-            delay(if (weatherInfo == null) 5 * 60 * 1000L else 30 * 60 * 1000L)
+            delay(3 * 60 * 60 * 1000L)
         }
     }
     DisposableEffect(appWidgetHost) {

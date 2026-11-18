@@ -1812,12 +1812,26 @@ private fun ProstoContent(
                                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                         .clickable {
                                             iconShapeChoice = choice
-                                            prefs.edit().putString("icon_shape", choice.name).apply()
+                                            prefs.edit().putString("icon_shape", when (choice) {
+                                                IconShapeChoice.CIRCLE -> "CIRCLE"
+                                                IconShapeChoice.SQUARE -> "SQUARE"
+                                                IconShapeChoice.TRIANGLE -> "TRIANGLE"
+                                                IconShapeChoice.COOKIE_12 -> "COOKIE_12"
+                                                IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
+                                                IconShapeChoice.CLOVER_4 -> "CLOVER_4"
+                                            }).apply()
                                         }.padding(vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically) {
                                         RadioButton(selected = iconShapeChoice == choice, onClick = {
                                             iconShapeChoice = choice
-                                            prefs.edit().putString("icon_shape", choice.name).apply()
+                                            prefs.edit().putString("icon_shape", when (choice) {
+                                                IconShapeChoice.CIRCLE -> "CIRCLE"
+                                                IconShapeChoice.SQUARE -> "SQUARE"
+                                                IconShapeChoice.TRIANGLE -> "TRIANGLE"
+                                                IconShapeChoice.COOKIE_12 -> "COOKIE_12"
+                                                IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
+                                                IconShapeChoice.CLOVER_4 -> "CLOVER_4"
+                                            }).apply()
                                         })
                                         Spacer(Modifier.width(8.dp))
                                         apps.firstOrNull()?.let { AppImage(it, 34, choice) }

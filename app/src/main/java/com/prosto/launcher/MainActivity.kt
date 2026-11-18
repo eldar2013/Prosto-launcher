@@ -109,14 +109,15 @@ private data class WeatherInfo(val temperature: Int, val description: String, va
 private val russianWeatherCities = listOf(
  WeatherCity("Москва",55.7558,37.6173), WeatherCity("Санкт-Петербург",59.9343,30.3351), WeatherCity("Казань",55.7961,49.1064), WeatherCity("Екатеринбург",56.8389,60.6057), WeatherCity("Новосибирск",55.0084,82.9357), WeatherCity("Краснодар",45.0355,38.9753), WeatherCity("Нижний Новгород",56.2965,43.9361), WeatherCity("Самара",53.1959,50.1002), WeatherCity("Сочи",43.5855,39.7231), WeatherCity("Ростов-на-Дону",47.2357,39.7015), WeatherCity("Воронеж",51.6608,39.2003), WeatherCity("Уфа",54.7388,55.9721), WeatherCity("Челябинск",55.1644,61.4368), WeatherCity("Пермь",58.0105,56.2502), WeatherCity("Омск",54.9885,73.3242), WeatherCity("Волгоград",48.7080,44.5133), WeatherCity("Красноярск",56.0153,92.8932), WeatherCity("Тюмень",57.1522,65.5272), WeatherCity("Иркутск",52.2864,104.2807), WeatherCity("Владивосток",43.1155,131.8855), WeatherCity("Калининград",54.7104,20.4522), WeatherCity("Саратов",51.5336,46.0343)
 )
-private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: String): WeatherInfo? = withContext(Dispatchers.IO) {
+private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: String): Pair<WeatherInfo?, String?> = withContext(Dispatchers.IO) {
  runCatching {
   val connection = when (source) {
    "yandex" -> URL("https://api.weather.yandex.ru/v2/informers?lat=${city.latitude}&lon=${city.longitude}&lang=ru_RU").openConnection().apply { setRequestProperty("X-Yandex-Weather-Key", apiKey) }
    "google" -> URL("https://weather.googleapis.com/v1/currentConditions:lookup?key=$apiKey&location.latitude=${city.latitude}&location.longitude=${city.longitude}").openConnection()
    else -> URL("https://api.open-meteo.com/v1/forecast?latitude=${city.latitude}&longitude=${city.longitude}&current=temperature_2m,weather_code&timezone=auto").openConnection()
   }
-  connection.connectTimeout = 10000; connection.readTimeout = 10000
+  connection.connectTimeout = 20000; connection.readTimeout = 20000
+  connection.setRequestProperty("User-Agent", "ProstoLauncher/1.0 (weather widget)")
   val json = JSONObject(connection.getInputStream().bufferedReader().use { it.readText() })
   when (source) {
    "yandex" -> {
@@ -147,8 +148,7 @@ private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: Strin
     WeatherInfo(kotlin.math.round(current.getDouble("temperature_2m")).toInt(), description, emoji)
    }
   }
- }.getOrNull()
-}
+ }.fold(onSuccess = { it to null }, onFailure = { error -> null to (error.message ?: error.javaClass.simpleName) })
 
 private data class WorkspaceWidget(
     val id: Int,
@@ -449,12 +449,11 @@ private fun ProstoContent(
         val city = WeatherCity(weatherCityName, lat, lon)
         while (true) {
             weatherLoading = true
-            weatherInfo = loadWeather(city, "openmeteo", "")
-            weatherError = if (weatherInfo == null) {
-                if ((prefs.getString("app_language", "ru") ?: "ru") == "en") "Couldn't load weather. Check your connection." else "Не удалось получить погоду. Проверь интернет."
-            } else null
+            val result = loadWeather(city, "openmeteo", "")
+            weatherInfo = result.first
+            weatherError = result.second?.let { "Ошибка погоды: $it" }
             weatherLoading = false
-            delay(30 * 60 * 1000L)
+            delay(if (weatherInfo == null) 5 * 60 * 1000L else 30 * 60 * 1000L)
         }
     }
     DisposableEffect(appWidgetHost) {

@@ -659,8 +659,16 @@ private fun ProstoContent(
     var memberMenu by remember { mutableStateOf<Pair<String, String>?>(null) }
     var addToFolderKey by remember { mutableStateOf<String?>(null) }
     var iconShapeChoice by remember {
-        mutableStateOf(runCatching { IconShapeChoice.valueOf(prefs.getString("icon_shape", "CIRCLE") ?: "CIRCLE") }
-            .getOrDefault(IconShapeChoice.CIRCLE))
+        mutableStateOf(
+            when (prefs.getString("icon_shape", "CIRCLE")) {
+                "SQUARE" -> IconShapeChoice.SQUARE
+                "TRIANGLE" -> IconShapeChoice.TRIANGLE
+                "COOKIE_12" -> IconShapeChoice.COOKIE_12
+                "SOFT_BURST" -> IconShapeChoice.SOFT_BURST
+                "CLOVER_4" -> IconShapeChoice.CLOVER_4
+                else -> IconShapeChoice.CIRCLE
+            }
+        )
     }
     var folderOpacity by remember { mutableFloatStateOf(prefs.getFloat("folder_opacity", 0.88f).coerceIn(0.15f, 1f)) }
     var folderContents by remember {

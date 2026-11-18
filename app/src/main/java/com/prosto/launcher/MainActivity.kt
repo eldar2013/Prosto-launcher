@@ -201,9 +201,13 @@ private fun ProstoHome() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("prosto_launcher", 0) }
     var themeChoice by remember {
-        mutableStateOf(runCatching {
-            LauncherTheme.valueOf(prefs.getString("theme_choice", "SYSTEM") ?: "SYSTEM")
-        }.getOrDefault(LauncherTheme.SYSTEM))
+        mutableStateOf(
+            when (prefs.getString("theme_choice", "SYSTEM")) {
+                "LIGHT" -> LauncherTheme.LIGHT
+                "DARK" -> LauncherTheme.DARK
+                else -> LauncherTheme.SYSTEM
+            }
+        )
     }
     val dark = when (themeChoice) {
         LauncherTheme.LIGHT -> false

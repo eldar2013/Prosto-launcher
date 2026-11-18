@@ -401,7 +401,7 @@ private fun ProstoContent(
             weatherLoading = true
             weatherInfo = loadWeather(city, "openmeteo", "")
             weatherError = if (weatherInfo == null) {
-                if (appLanguage == "en") "Couldn't load weather. Check your connection." else "Не удалось получить погоду. Проверь интернет."
+                if ((prefs.getString("app_language", "ru") ?: "ru") == "en") "Couldn't load weather. Check your connection." else "Не удалось получить погоду. Проверь интернет."
             } else null
             weatherLoading = false
             delay(30 * 60 * 1000L)

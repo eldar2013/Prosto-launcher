@@ -359,7 +359,7 @@ private fun ProstoContent(
                     .getFromLocation(location.latitude, location.longitude, 1)
                     ?.firstOrNull()?.locality
                 else null
-            }.getOrNull()?.takeIf { it.isNotBlank() } ?: if (appLanguage == "en") "Current location" else "Текущее местоположение"
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: if ((prefs.getString("app_language", "ru") ?: "ru") == "en") "Current location" else "Текущее местоположение"
             applyWeatherLocation(location.latitude, location.longitude, name)
             true
         }.getOrDefault(false)
@@ -2109,6 +2109,7 @@ private fun tr(value: String, language: String): String {
         "Снег" -> "Snow"
         "Гроза" -> "Thunderstorm"
         "Туман" -> "Fog"
+        "Не удалось получить погоду. Проверь интернет." -> "Could not load weather. Check your connection."
         "Ливень" -> "Heavy rain"
         "Снегопад" -> "Snowfall"
         "Текущее местоположение" -> "Current location"

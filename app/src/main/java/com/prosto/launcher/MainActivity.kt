@@ -5,7 +5,11 @@ import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.location.Geocoder
 import android.location.LocationManager
+import android.location.Location
+import android.location.LocationListener
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -339,6 +343,17 @@ private fun ProstoContent(
     var weatherLoading by remember { mutableStateOf(false) }
     var weatherError by remember { mutableStateOf<String?>(null) }
     var weatherRefreshToken by remember { mutableIntStateOf(0) }
+    var activeWeatherLocationListener by remember { mutableStateOf<LocationListener?>(null) }
+    val weatherLocationHandler = remember { Handler(Looper.getMainLooper()) }
+    fun stopWeatherLocationUpdates() {
+        activeWeatherLocationListener?.let { listener ->
+            runCatching {
+                (context.getSystemService(Context.LOCATION_SERVICE) as LocationManager).removeUpdates(listener)
+            }
+        }
+        activeWeatherLocationListener = null
+        weatherLocationHandler.removeCallbacksAndMessages("weather_location_timeout")
+    }
     fun applyWeatherLocation(latitude: Double, longitude: Double, name: String) {
         weatherLatitude = latitude
         weatherLongitude = longitude
@@ -348,21 +363,56 @@ private fun ProstoContent(
             .putString("weather_longitude", longitude.toString()).apply()
         if (pendingWeatherWidget) { pendingWeatherWidget = false; addOwnWidget("weather") }
     }
+    fun saveDetectedWeatherLocation(location: Location) {
+        val name = runCatching {
+            if (Geocoder.isPresent()) Geocoder(context, Locale.getDefault())
+                .getFromLocation(location.latitude, location.longitude, 1)
+                ?.firstOrNull()?.locality
+            else null
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: if ((prefs.getString("app_language", "ru") ?: "ru") == "en") "Current location" else "Текущее местоположение"
+        applyWeatherLocation(location.latitude, location.longitude, name)
+    }
     fun detectWeatherLocation(): Boolean {
         return runCatching {
             val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
             val location = manager.getProviders(true).asSequence()
                 .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
                 .maxByOrNull { it.time } ?: return@runCatching false
-            val name = runCatching {
-                if (Geocoder.isPresent()) Geocoder(context, Locale.getDefault())
-                    .getFromLocation(location.latitude, location.longitude, 1)
-                    ?.firstOrNull()?.locality
-                else null
-            }.getOrNull()?.takeIf { it.isNotBlank() } ?: if ((prefs.getString("app_language", "ru") ?: "ru") == "en") "Current location" else "Текущее местоположение"
-            applyWeatherLocation(location.latitude, location.longitude, name)
+            saveDetectedWeatherLocation(location)
             true
         }.getOrDefault(false)
+    }
+    fun requestFreshWeatherLocation() {
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        stopWeatherLocationUpdates()
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                stopWeatherLocationUpdates()
+                saveDetectedWeatherLocation(location)
+            }
+        }
+        activeWeatherLocationListener = listener
+        val providers = manager.getProviders(true).filter { provider ->
+            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
+        }
+        var requested = false
+        providers.forEach { provider ->
+            requested = runCatching {
+                manager.requestLocationUpdates(provider, 1000L, 0f, listener, Looper.getMainLooper())
+                true
+            }.getOrDefault(requested)
+        }
+        if (!requested) {
+            stopWeatherLocationUpdates()
+            weatherCityDialog = true
+        } else {
+            weatherLocationHandler.postAtTime({
+                if (activeWeatherLocationListener != null) {
+                    stopWeatherLocationUpdates()
+                    weatherCityDialog = true
+                }
+            }, "weather_location_timeout", android.os.SystemClock.uptimeMillis() + 15000L)
+        }
     }
     val weatherLocationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()

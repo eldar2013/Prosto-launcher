@@ -149,6 +149,7 @@ private suspend fun loadWeather(city: WeatherCity, source: String, apiKey: Strin
    }
   }
  }.fold(onSuccess = { it to null }, onFailure = { error -> null to (error.message ?: error.javaClass.simpleName) })
+}
 
 private data class WorkspaceWidget(
     val id: Int,

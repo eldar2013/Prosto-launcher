@@ -3,6 +3,9 @@ package com.prosto.launcher
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.location.Geocoder
+import android.location.LocationManager
+import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -328,33 +331,82 @@ private fun ProstoContent(
     var resizingWidgetId by remember { mutableStateOf<Int?>(null) }
     var draggingWidget by remember { mutableStateOf(false) }
     var weatherCityName by remember { mutableStateOf(prefs.getString("weather_city_name", "") ?: "") }
+    var weatherLatitude by remember { mutableStateOf(prefs.getString("weather_latitude", "")?.toDoubleOrNull()) }
+    var weatherLongitude by remember { mutableStateOf(prefs.getString("weather_longitude", "")?.toDoubleOrNull()) }
     var weatherCityDialog by remember { mutableStateOf(false) }
     var pendingWeatherWidget by remember { mutableStateOf(false) }
     var weatherInfo by remember { mutableStateOf<WeatherInfo?>(null) }
     var weatherLoading by remember { mutableStateOf(false) }
-    var weatherSource by remember { mutableStateOf(prefs.getString("weather_source", "openmeteo") ?: "openmeteo") }
-    var yandexWeatherKey by remember { mutableStateOf(prefs.getString("weather_yandex_key", "") ?: "") }
-    var googleWeatherKey by remember { mutableStateOf(prefs.getString("weather_google_key", "") ?: "") }
     var weatherError by remember { mutableStateOf<String?>(null) }
-    var weatherRefreshToken by remember { mutableStateOf(0) }
-    LaunchedEffect(weatherCityName, weatherSource, yandexWeatherKey, googleWeatherKey, weatherRefreshToken) {
-        weatherInfo = null; weatherError = null
-        val city = russianWeatherCities.firstOrNull { it.name == weatherCityName } ?: return@LaunchedEffect
+    var weatherRefreshToken by remember { mutableIntStateOf(0) }
+    fun applyWeatherLocation(latitude: Double, longitude: Double, name: String) {
+        weatherLatitude = latitude
+        weatherLongitude = longitude
+        weatherCityName = name
+        prefs.edit().putString("weather_city_name", name)
+            .putString("weather_latitude", latitude.toString())
+            .putString("weather_longitude", longitude.toString()).apply()
+        if (pendingWeatherWidget) { pendingWeatherWidget = false; addOwnWidget("weather") }
+    }
+    fun detectWeatherLocation(): Boolean {
+        return runCatching {
+            val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val location = manager.getProviders(true).asSequence()
+                .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+                .maxByOrNull { it.time } ?: return@runCatching false
+            val name = runCatching {
+                if (Geocoder.isPresent()) Geocoder(context, Locale.getDefault())
+                    .getFromLocation(location.latitude, location.longitude, 1)
+                    ?.firstOrNull()?.locality
+                else null
+            }.getOrNull()?.takeIf { it.isNotBlank() } ?: if (appLanguage == "en") "Current location" else "Текущее местоположение"
+            applyWeatherLocation(location.latitude, location.longitude, name)
+            true
+        }.getOrDefault(false)
+    }
+    val weatherLocationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true ||
+            permissions[android.Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (granted && !detectWeatherLocation()) weatherCityDialog = true
+        else if (!granted) weatherCityDialog = true
+    }
+    fun requestWeatherWidget() {
+        if (weatherCityName.isNotBlank() && weatherLatitude != null && weatherLongitude != null) {
+            addOwnWidget("weather")
+        } else {
+            pendingWeatherWidget = true
+            val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED || androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            if (hasPermission) {
+                if (!detectWeatherLocation()) weatherCityDialog = true
+            } else weatherLocationPermission.launch(arrayOf(
+                android.Manifest.permission.ACCESS_COARSE_LOCATION,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ))
+        }
+    }
+    LaunchedEffect(weatherCityName, weatherLatitude, weatherLongitude, weatherRefreshToken) {
+        weatherInfo = null
+        weatherError = null
+        val lat = weatherLatitude
+        val lon = weatherLongitude
+        if (lat == null || lon == null) return@LaunchedEffect
+        val city = WeatherCity(weatherCityName, lat, lon)
         while (true) {
             weatherLoading = true
-            val key = if (weatherSource == "yandex") yandexWeatherKey else googleWeatherKey
-            if (weatherSource != "openmeteo" && key.isBlank()) {
-                weatherInfo = null
-                weatherError = "Добавь API-ключ в настройках погоды"
-            } else {
-                weatherInfo = loadWeather(city, weatherSource, key)
-                weatherError = if (weatherInfo == null) "Не удалось получить погоду. Проверь ключ и интернет." else null
-            }
+            weatherInfo = loadWeather(city, "openmeteo", "")
+            weatherError = if (weatherInfo == null) {
+                if (appLanguage == "en") "Couldn't load weather. Check your connection." else "Не удалось получить погоду. Проверь интернет."
+            } else null
             weatherLoading = false
             delay(30 * 60 * 1000L)
         }
     }
-    fun requestWeatherWidget() { if (weatherCityName.isBlank()) { pendingWeatherWidget = true; weatherCityDialog = true } else addOwnWidget("weather") }
     DisposableEffect(appWidgetHost) {
         runCatching { appWidgetHost.startListening() }
         onDispose { runCatching { appWidgetHost.stopListening() } }
@@ -1225,12 +1277,12 @@ private fun ProstoContent(
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
                                     when (widget.type) {
-                                        "digital" -> DigitalClockWidget(now, Modifier.fillMaxSize())
-                                        "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, weatherError, Modifier.fillMaxSize())
+                                        "digital" -> DigitalClockWidget(now, appLanguage, Modifier.fillMaxSize())
+                                        "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, weatherError, appLanguage, Modifier.fillMaxSize())
                                         "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
                                         "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
                                             Box(contentAlignment = Alignment.Center) {
-                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale("ru"))),
+                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", if (appLanguage == "en") Locale.ENGLISH else Locale("ru")) ),
                                                     color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
                                             }
                                         }
@@ -1545,7 +1597,7 @@ private fun ProstoContent(
             AlertDialog(onDismissRequest = { weatherCityDialog = false; pendingWeatherWidget = false }, title = { Text(tr("Выбери город", appLanguage)) },
                 text = { LazyColumn(Modifier.heightIn(max = 420.dp)) { lazyItems(russianWeatherCities) { city ->
                     Text(city.name, modifier = Modifier.fillMaxWidth().clickable {
-                        weatherCityName = city.name; prefs.edit().putString("weather_city_name", city.name).apply(); weatherCityDialog = false
+                        weatherCityName = city.name; weatherLatitude = city.latitude; weatherLongitude = city.longitude; prefs.edit().putString("weather_city_name", city.name).putString("weather_latitude", city.latitude.toString()).putString("weather_longitude", city.longitude.toString()).apply(); weatherCityDialog = false
                         if (pendingWeatherWidget) { pendingWeatherWidget = false; addOwnWidget("weather") }
                     }.padding(vertical = 12.dp, horizontal = 8.dp))
                 } } }, confirmButton = { TextButton(onClick = { weatherCityDialog = false; pendingWeatherWidget = false }) { Text(tr("Отмена", appLanguage)) } })
@@ -1716,30 +1768,7 @@ private fun ProstoContent(
                                 Text(tr("Погода", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 Text(if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else if (appLanguage == "en") "City: $weatherCityName" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
-                                Text(tr("Источник погоды", appLanguage), style = MaterialTheme.typography.titleMedium)
-                                listOf("openmeteo" to (if (appLanguage == "en") "Open-Meteo (no key required)" else "Open-Meteo (без ключа)"), "yandex" to "Яндекс Погода", "google" to "Google Weather").forEach { (value, label) ->
-                                    Row(Modifier.fillMaxWidth().clickable {
-                                        weatherSource = value
-                                        prefs.edit().putString("weather_source", value).apply()
-                                    }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        RadioButton(selected = weatherSource == value, onClick = {
-                                            weatherSource = value
-                                            prefs.edit().putString("weather_source", value).apply()
-                                        })
-                                        Text(label)
-                                    }
-                                }
-                                if (weatherSource == "yandex") {
-                                    OutlinedTextField(value = yandexWeatherKey, onValueChange = {
-                                        yandexWeatherKey = it; prefs.edit().putString("weather_yandex_key", it).apply()
-                                    }, label = { Text(tr("Ключ API Яндекс Погоды", appLanguage)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                                    Text(tr("Ключ выдаётся в кабинете разработчика Яндекса.", appLanguage), style = MaterialTheme.typography.bodySmall)
-                                } else if (weatherSource == "google") {
-                                    OutlinedTextField(value = googleWeatherKey, onValueChange = {
-                                        googleWeatherKey = it; prefs.edit().putString("weather_google_key", it).apply()
-                                    }, label = { Text(tr("Google Weather API key", appLanguage)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                                    Text(tr("Нужен ключ Google Maps Platform с включённым Weather API.", appLanguage), style = MaterialTheme.typography.bodySmall)
-                                }
+                                Text(tr("Погода обновляется автоматически. Ключ API не нужен.", appLanguage), style = MaterialTheme.typography.bodySmall)
                                 Divider()
                                 Text(tr("Прозрачность папок", appLanguage), style = MaterialTheme.typography.titleMedium)
                                 Text(tr("${(folderOpacity * 100).toInt()}%", appLanguage), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2080,6 +2109,10 @@ private fun tr(value: String, language: String): String {
         "Снег" -> "Snow"
         "Гроза" -> "Thunderstorm"
         "Туман" -> "Fog"
+        "Ливень" -> "Heavy rain"
+        "Снегопад" -> "Snowfall"
+        "Текущее местоположение" -> "Current location"
+        "Погода обновляется автоматически. Ключ API не нужен." -> "Weather updates automatically. No API key required."
         else -> value
     }
 }
@@ -2137,21 +2170,21 @@ private fun WidgetResizeKnob(
 }
 
 @Composable
-private fun DigitalClockWidget(now: LocalDateTime, modifier: Modifier = Modifier) {
+private fun DigitalClockWidget(now: LocalDateTime, language: String, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 48.sp, fontWeight = FontWeight.Light, color = Color.White)
-        Text(now.format(DateTimeFormatter.ofPattern("EEE, d MMMM", Locale("ru"))), color = Color.White.copy(alpha = 0.92f), fontSize = 17.sp)
+        Text(now.format(DateTimeFormatter.ofPattern("EEE, d MMMM", if (language == "en") Locale.ENGLISH else Locale("ru"))), color = Color.White.copy(alpha = 0.92f), fontSize = 17.sp)
     }
 }
 
 @Composable
-private fun WeatherWidget(cityName: String, weather: WeatherInfo?, loading: Boolean, error: String?, modifier: Modifier = Modifier) {
+private fun WeatherWidget(cityName: String, weather: WeatherInfo?, loading: Boolean, error: String?, language: String, modifier: Modifier = Modifier) {
     Row(modifier.fillMaxSize().padding(8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
         Text(weather?.emoji ?: "🌤️", fontSize = 48.sp); Spacer(Modifier.width(12.dp))
         Column {
             Text(weather?.let { "${if (it.temperature > 0) "+" else ""}${it.temperature}°" } ?: "—°", color = Color.White, fontSize = 38.sp, fontWeight = FontWeight.Light)
-            Text(weather?.description ?: if (loading) "Загрузка..." else "Нет данных", color = Color.White.copy(alpha = 0.92f), fontSize = 15.sp)
-            Text(error ?: cityName, color = Color.White.copy(alpha = 0.75f), fontSize = if (error == null) 12.sp else 10.sp, maxLines = 2)
+            Text(weather?.description?.let { tr(it, language) } ?: if (loading) tr("Загрузка...", language) else tr("Нет данных", language), color = Color.White.copy(alpha = 0.92f), fontSize = 15.sp)
+            Text(error?.let { tr(it, language) } ?: cityName, color = Color.White.copy(alpha = 0.75f), fontSize = if (error == null) 12.sp else 10.sp, maxLines = 2)
         }
     }
 }

@@ -1610,7 +1610,7 @@ private fun ProstoContent(
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(tr("Часы и дата", appLanguage), color = Purple, fontWeight = FontWeight.Bold)
                         listOf("digital" to "Цифровые часы", "analog" to "Аналоговые часы", "date" to "Дата", "weather" to "Погода").forEach { (type, label) ->
-                            Text(label, modifier = Modifier.fillMaxWidth().clickable {
+                            Text(tr(label, appLanguage), modifier = Modifier.fillMaxWidth().clickable {
                                 if (type == "weather") requestWeatherWidget() else addOwnWidget(type)
                                 widgetSourceOpen = false
                             }.padding(10.dp))

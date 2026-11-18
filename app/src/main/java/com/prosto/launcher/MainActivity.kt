@@ -1800,7 +1800,7 @@ private fun ProstoContent(
                             item {
                                 Divider()
                                 Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                IconShapeChoice.values().forEach { choice ->
+                                listOf(IconShapeChoice.CIRCLE, IconShapeChoice.SQUARE, IconShapeChoice.TRIANGLE, IconShapeChoice.COOKIE_12, IconShapeChoice.SOFT_BURST, IconShapeChoice.CLOVER_4).forEach { choice ->
                                     val label = when (choice) {
                                         IconShapeChoice.CIRCLE -> "Circle"
                                         IconShapeChoice.SQUARE -> "Square"

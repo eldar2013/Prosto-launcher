@@ -1008,7 +1008,9 @@ private fun ProstoContent(
         }
     }
 
-    BackHandler(enabled = folderVisible) { folderVisible = false }
+    BackHandler(enabled = folderVisible || drawerOpen) {
+        if (folderVisible) folderVisible = false else drawerOpen = false
+    }
 
     Box(
         Modifier.fillMaxSize()
@@ -1476,6 +1478,9 @@ private fun ProstoContent(
                 DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
             }
+            WaveformLine(
+                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 28.dp).height(34.dp).padding(bottom = 138.dp)
+            )
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 88.dp, top = 2.dp),
                 horizontalArrangement = Arrangement.Center,
@@ -1501,7 +1506,20 @@ private fun ProstoContent(
             exit = fadeOut(tween(160)) + scaleOut(targetScale = 0.97f, animationSpec = tween(180)) +
                 slideOutVertically(targetOffsetY = { it / 8 }, animationSpec = tween(180))
         ) {
-            Column(Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f)).padding(horizontal = 18.dp, vertical = 14.dp)) {
+            Column(
+                Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f))
+                    .pointerInput(drawerOpen) {
+                        var downward = 0f
+                        detectDragGestures(
+                            onDragEnd = { if (downward > 70.dp.toPx()) drawerOpen = false; downward = 0f },
+                            onDragCancel = { downward = 0f }
+                        ) { change, drag ->
+                            if (drag.y > 0f) downward += drag.y
+                            change.consume()
+                        }
+                    }
+                    .padding(horizontal = 18.dp, vertical = 14.dp)
+            ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Apps", color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                     Surface(color = Lavender.copy(alpha = 0.18f), shape = RoundedCornerShape(18.dp)) {
@@ -1537,8 +1555,8 @@ private fun ProstoContent(
                     }
                     if (alphabet.isNotEmpty()) {
                         Column(
-                            modifier = Modifier.width(24.dp).fillMaxHeight(),
-                            verticalArrangement = Arrangement.SpaceEvenly,
+                            modifier = Modifier.width(24.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.Top,
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             alphabet.forEach { letter ->
@@ -1876,6 +1894,14 @@ private fun ProstoContent(
                             }
                             item {
                                 Divider()
+                                Text("Prosto Launcher 0.2.0", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                OutlinedButton(onClick = {
+                                    runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
+                                        .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } }
+                                }) { Text(tr("Сделать лаунчером по умолчанию", appLanguage)) }
+                            }
+                            item {
+                                Divider()
                                 Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
                                 listOf(IconShapeChoice.CIRCLE, IconShapeChoice.SQUARE, IconShapeChoice.VERY_SUNNY, IconShapeChoice.COOKIE_9, IconShapeChoice.SOFT_BURST, IconShapeChoice.CLOVER).forEach { choice ->
                                     val label = when (choice) {
@@ -2190,6 +2216,7 @@ private fun tr(value: String, language: String): String {
     if (language != "en") return value
     return when (value) {
         "Настройки лаунчера" -> "Launcher settings"
+        "Сделать лаунчером по умолчанию" -> "Set as default launcher"
         "Готово" -> "Done"
         "Новый рабочий стол" -> "New home screen"
         "В нижн. панель" -> "Add to dock"
@@ -2320,6 +2347,34 @@ private fun WidgetResizeKnob(
                 }
             }
     )
+}
+
+@Composable
+private fun WaveformLine(modifier: Modifier = Modifier) {
+    val transition = androidx.compose.animation.core.rememberInfiniteTransition(label = "launcher-wave")
+    val phase by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = (Math.PI * 2.0).toFloat(),
+        animationSpec = androidx.compose.animation.core.infiniteRepeatable(
+            animation = tween(2400, easing = androidx.compose.animation.core.LinearEasing),
+            repeatMode = androidx.compose.animation.core.RepeatMode.Restart
+        ),
+        label = "wave-phase"
+    )
+    androidx.compose.foundation.Canvas(modifier) {
+        val mid = size.height / 2f
+        val amplitude = size.height * 0.28f
+        val path = androidx.compose.ui.graphics.Path()
+        val steps = 160
+        for (i in 0..steps) {
+            val x = size.width * i / steps
+            val y = mid + kotlin.math.sin((x / size.width * Math.PI * 10.0) + phase).toFloat() * amplitude
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+        drawPath(path, Color.White.copy(alpha = 0.95f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.6.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
+        val endX = size.width - 2.dp.toPx()
+        drawLine(Color.White, Offset(endX, mid - size.height * 0.48f), Offset(endX, mid + size.height * 0.48f), strokeWidth = 3.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+    }
 }
 
 @Composable

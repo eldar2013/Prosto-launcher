@@ -208,7 +208,7 @@ private data class LauncherApp(
 )
 
 private enum class LauncherTheme { SYSTEM, LIGHT, DARK }
-private enum class IconShapeChoice { CIRCLE, SQUARE, TRIANGLE, COOKIE_12, SOFT_BURST, CLOVER_4 }
+private enum class IconShapeChoice { CIRCLE, SQUARE, VERY_SUNNY, COOKIE_9, SOFT_BURST, CLOVER }
 
 private val Purple = Color(0xFF9A78F2)
 private val Lavender = Color(0xFFC5A9FF)
@@ -703,10 +703,10 @@ private fun ProstoContent(
         mutableStateOf(
             when (prefs.getString("icon_shape", "CIRCLE")) {
                 "SQUARE" -> IconShapeChoice.SQUARE
-                "TRIANGLE" -> IconShapeChoice.TRIANGLE
-                "COOKIE_12" -> IconShapeChoice.COOKIE_12
+                "VERY_SUNNY", "TRIANGLE" -> IconShapeChoice.VERY_SUNNY
+                "COOKIE_9", "COOKIE_12" -> IconShapeChoice.COOKIE_9
                 "SOFT_BURST" -> IconShapeChoice.SOFT_BURST
-                "CLOVER_4" -> IconShapeChoice.CLOVER_4
+                "CLOVER", "CLOVER_4" -> IconShapeChoice.CLOVER
                 else -> IconShapeChoice.CIRCLE
             }
         )
@@ -1457,7 +1457,7 @@ private fun ProstoContent(
                                 }
                             }
                         ),
-                    shape = CircleShape, color = Color(0xFFEDE5FF).copy(alpha = 0.92f), shadowElevation = 5.dp
+                    shape = iconShape(IconShapeChoice.SOFT_BURST), color = Color(0xFFEDE5FF).copy(alpha = 0.92f), shadowElevation = 5.dp
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Все приложения", tint = DarkInk, modifier = Modifier.size(34.dp))
@@ -1841,14 +1841,14 @@ private fun ProstoContent(
                             item {
                                 Divider()
                                 Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                listOf(IconShapeChoice.CIRCLE, IconShapeChoice.SQUARE, IconShapeChoice.TRIANGLE, IconShapeChoice.COOKIE_12, IconShapeChoice.SOFT_BURST, IconShapeChoice.CLOVER_4).forEach { choice ->
+                                listOf(IconShapeChoice.CIRCLE, IconShapeChoice.SQUARE, IconShapeChoice.VERY_SUNNY, IconShapeChoice.COOKIE_9, IconShapeChoice.SOFT_BURST, IconShapeChoice.CLOVER).forEach { choice ->
                                     val label = when (choice) {
                                         IconShapeChoice.CIRCLE -> "Circle"
                                         IconShapeChoice.SQUARE -> "Square"
-                                        IconShapeChoice.TRIANGLE -> "Triangle"
-                                        IconShapeChoice.COOKIE_12 -> "12-sided cookie"
+                                        IconShapeChoice.VERY_SUNNY -> "Very sunny"
+                                        IconShapeChoice.COOKIE_9 -> "9-sided cookie"
                                         IconShapeChoice.SOFT_BURST -> "Soft burst"
-                                        IconShapeChoice.CLOVER_4 -> "4-leaf clover"
+                                        IconShapeChoice.CLOVER -> "Clover"
                                     }
                                     Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                         .clickable {
@@ -1856,10 +1856,10 @@ private fun ProstoContent(
                                             prefs.edit().putString("icon_shape", when (choice) {
                                                 IconShapeChoice.CIRCLE -> "CIRCLE"
                                                 IconShapeChoice.SQUARE -> "SQUARE"
-                                                IconShapeChoice.TRIANGLE -> "TRIANGLE"
-                                                IconShapeChoice.COOKIE_12 -> "COOKIE_12"
+                                                IconShapeChoice.VERY_SUNNY -> "VERY_SUNNY"
+                                                IconShapeChoice.COOKIE_9 -> "COOKIE_9"
                                                 IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
-                                                IconShapeChoice.CLOVER_4 -> "CLOVER_4"
+                                                IconShapeChoice.CLOVER -> "CLOVER"
                                             }).apply()
                                         }.padding(vertical = 4.dp),
                                         verticalAlignment = Alignment.CenterVertically) {
@@ -1868,10 +1868,10 @@ private fun ProstoContent(
                                             prefs.edit().putString("icon_shape", when (choice) {
                                                 IconShapeChoice.CIRCLE -> "CIRCLE"
                                                 IconShapeChoice.SQUARE -> "SQUARE"
-                                                IconShapeChoice.TRIANGLE -> "TRIANGLE"
-                                                IconShapeChoice.COOKIE_12 -> "COOKIE_12"
+                                                IconShapeChoice.VERY_SUNNY -> "VERY_SUNNY"
+                                                IconShapeChoice.COOKIE_9 -> "COOKIE_9"
                                                 IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
-                                                IconShapeChoice.CLOVER_4 -> "CLOVER_4"
+                                                IconShapeChoice.CLOVER -> "CLOVER"
                                             }).apply()
                                         })
                                         Spacer(Modifier.width(8.dp))
@@ -2372,53 +2372,45 @@ private fun queryLauncherApps(context: android.content.Context): List<LauncherAp
     }.getOrElse { emptyList() }
 }
 
+
+private fun scallopedShape(lobes: Int, innerRadius: Float): Shape = GenericShape { size, _ ->
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val radius = minOf(size.width, size.height) / 2f
+    val points = (0 until lobes * 2).map { i ->
+        val angle = Math.PI * 2.0 * i / (lobes * 2.0) - Math.PI / 2.0
+        val r = radius * if (i % 2 == 0) 1f else innerRadius
+        Offset(cx + r * kotlin.math.cos(angle).toFloat(), cy + r * kotlin.math.sin(angle).toFloat())
+    }
+    val firstMid = Offset((points.last().x + points.first().x) / 2f, (points.last().y + points.first().y) / 2f)
+    moveTo(firstMid.x, firstMid.y)
+    points.forEachIndexed { i, point ->
+        val next = points[(i + 1) % points.size]
+        val mid = Offset((point.x + next.x) / 2f, (point.y + next.y) / 2f)
+        quadraticTo(point.x, point.y, mid.x, mid.y)
+    }
+    close()
+}
+
 private fun iconShape(choice: IconShapeChoice): Shape {
     return when (choice) {
         IconShapeChoice.CIRCLE -> CircleShape
         IconShapeChoice.SQUARE -> RectangleShape
-        IconShapeChoice.TRIANGLE -> GenericShape { size, _ ->
-            moveTo(size.width / 2f, 0f)
-            lineTo(size.width, size.height)
-            lineTo(0f, size.height)
-            close()
-        }
-        IconShapeChoice.COOKIE_12 -> GenericShape { size, _ ->
+        IconShapeChoice.VERY_SUNNY -> scallopedShape(8, 0.78f)
+        IconShapeChoice.COOKIE_9 -> GenericShape { size, _ ->
             val cx = size.width / 2f
             val cy = size.height / 2f
             val radius = minOf(size.width, size.height) / 2f
-            for (i in 0 until 12) {
-                val angle = (Math.PI * 2.0 * i / 12.0) - Math.PI / 2.0
+            for (i in 0 until 9) {
+                val angle = (Math.PI * 2.0 * i / 9.0) - Math.PI / 2.0
                 val x = cx + radius * kotlin.math.cos(angle).toFloat()
                 val y = cy + radius * kotlin.math.sin(angle).toFloat()
                 if (i == 0) moveTo(x, y) else lineTo(x, y)
             }
             close()
         }
-        IconShapeChoice.SOFT_BURST -> GenericShape { size, _ ->
-            val cx = size.width / 2f
-            val cy = size.height / 2f
-            val radius = minOf(size.width, size.height) / 2f
-            for (i in 0 until 24) {
-                val angle = (Math.PI * 2.0 * i / 24.0) - Math.PI / 2.0
-                val r = radius * if (i % 2 == 0) 1f else 0.82f
-                val x = cx + r * kotlin.math.cos(angle).toFloat()
-                val y = cy + r * kotlin.math.sin(angle).toFloat()
-                if (i == 0) moveTo(x, y) else lineTo(x, y)
-            }
-            close()
-        }
-        IconShapeChoice.CLOVER_4 -> GenericShape { size, _ ->
-            val w = size.width
-            val h = size.height
-            moveTo(w * 0.5f, h * 0.98f)
-            cubicTo(w * 0.38f, h * 0.78f, w * 0.12f, h * 0.78f, w * 0.08f, h * 0.58f)
-            cubicTo(w * 0.02f, h * 0.38f, w * 0.22f, h * 0.28f, w * 0.42f, h * 0.44f)
-            cubicTo(w * 0.28f, h * 0.22f, w * 0.38f, h * 0.02f, w * 0.58f, h * 0.08f)
-            cubicTo(w * 0.78f, h * 0.12f, w * 0.78f, h * 0.38f, w * 0.56f, h * 0.48f)
-            cubicTo(w * 0.78f, h * 0.28f, w * 0.98f, h * 0.38f, w * 0.92f, h * 0.58f)
-            cubicTo(w * 0.88f, h * 0.78f, w * 0.62f, h * 0.78f, w * 0.5f, h * 0.98f)
-            close()
-        }
+        IconShapeChoice.SOFT_BURST -> scallopedShape(12, 0.82f)
+        IconShapeChoice.CLOVER -> scallopedShape(4, 0.70f)
     }
 }
 

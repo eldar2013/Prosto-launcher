@@ -57,6 +57,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.GenericShape
@@ -67,6 +68,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -904,6 +906,14 @@ private fun ProstoContent(
     val appMap = remember(apps) { apps.associateBy { it.packageName } }
     val dockApps = dockPackages.mapNotNull { appMap[it] }
     val filteredApps = apps.filter { it.label.contains(search, ignoreCase = true) }
+        .sortedBy { it.label.lowercase() }
+    val drawerGridState = rememberLazyGridState()
+    val drawerScope = rememberCoroutineScope()
+    val alphabet = remember(filteredApps) { filteredApps.map { it.label.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }.distinct().sorted() }
+    val alphabetTargets = remember(filteredApps) {
+        filteredApps.mapIndexed { index, app -> (app.label.firstOrNull()?.uppercaseChar()?.toString() ?: "#") to index }
+            .distinctBy { it.first }.toMap()
+    }
 
     fun folderTitle(key: String): String = folderNames[key] ?: "Папка"
 
@@ -1491,14 +1501,68 @@ private fun ProstoContent(
             exit = fadeOut(tween(160)) + scaleOut(targetScale = 0.97f, animationSpec = tween(180)) +
                 slideOutVertically(targetOffsetY = { it / 8 }, animationSpec = tween(180))
         ) {
-            Column(Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f)).padding(18.dp)) {
+            Column(Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f)).padding(horizontal = 18.dp, vertical = 14.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(tr("Все приложения", appLanguage), color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { drawerOpen = false }) { Text(tr("Готово", appLanguage), color = Lavender) }
+                    Text("Apps", color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                    Surface(color = Lavender.copy(alpha = 0.18f), shape = RoundedCornerShape(18.dp)) {
+                        Text("${filteredApps.size}", color = Lavender, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp), fontWeight = FontWeight.Bold)
+                    }
+                }
+                Row(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp, bottom = 8.dp)) {
+                    LazyVerticalGrid(
+                        state = drawerGridState,
+                        columns = GridCells.Adaptive(minSize = 76.dp),
+                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                        contentPadding = PaddingValues(top = 6.dp, bottom = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        items(filteredApps, key = { it.packageName }) { app ->
+                            val cellBounds = remember { arrayOfNulls<Rect>(1) }
+                            Column(
+                                Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                                    .onGloballyPositioned { cellBounds[0] = it.boundsInRoot() }
+                                    .combinedClickable(
+                                        onClick = { launch(app.packageName, cellBounds[0]) },
+                                        onLongClick = { selectedApp = app }
+                                    ).padding(vertical = 5.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                AppImage(app, 52, iconShapeChoice)
+                                Spacer(Modifier.height(4.dp))
+                                Text(app.label, color = Color.White, fontSize = 11.sp, maxLines = 2,
+                                    textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    if (alphabet.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier.width(24.dp).fillMaxHeight(),
+                            verticalArrangement = Arrangement.SpaceEvenly,
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            alphabet.forEach { letter ->
+                                Text(
+                                    letter,
+                                    color = Lavender,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.clickable {
+                                        val target = alphabetTargets[letter] ?: 0
+                                        drawerScope.launch { drawerGridState.animateScrollToItem(target) }
+                                    }.padding(vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
                 }
                 OutlinedTextField(
-                    value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth(),
-                    singleLine = true, shape = RoundedCornerShape(28.dp), placeholder = { Text(tr("Поиск приложений", appLanguage)) },
+                    value = search,
+                    onValueChange = { search = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(28.dp),
+                    placeholder = { Text(tr("Поиск приложений", appLanguage)) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White, unfocusedTextColor = Color.White,
@@ -1506,34 +1570,6 @@ private fun ProstoContent(
                         focusedLeadingIconColor = Lavender, unfocusedLeadingIconColor = Color.White
                     )
                 )
-                Text(
-                    tr("Зажми приложение, чтобы открыть меню действий", appLanguage),
-                    color = Color.White.copy(alpha = 0.72f), style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 10.dp)
-                )
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 76.dp), modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(top = 14.dp, bottom = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(14.dp)
-                ) {
-                    items(filteredApps, key = { it.packageName }) { app ->
-                        val cellBounds = remember { arrayOfNulls<Rect>(1) }
-                        Column(
-                            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                                .onGloballyPositioned { cellBounds[0] = it.boundsInRoot() }
-                                .combinedClickable(
-                                onClick = { launch(app.packageName, cellBounds[0]) },
-                                onLongClick = { selectedApp = app }
-                            ).padding(vertical = 5.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            AppImage(app, 52, iconShapeChoice)
-                            Spacer(Modifier.height(4.dp))
-                            Text(app.label, color = Color.White, fontSize = 11.sp, maxLines = 2,
-                                textAlign = TextAlign.Center, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
-                }
             }
         }
 

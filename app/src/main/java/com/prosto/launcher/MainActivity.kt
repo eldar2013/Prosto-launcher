@@ -1510,12 +1510,19 @@ private fun ProstoContent(
                 Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f))
                     .pointerInput(drawerOpen) {
                         var downward = 0f
+                        var startedInHeader = false
                         detectDragGestures(
-                            onDragEnd = { if (downward > 70.dp.toPx()) drawerOpen = false; downward = 0f },
+                            onDragStart = { start ->
+                                startedInHeader = start.y <= 90.dp.toPx()
+                                downward = 0f
+                            },
+                            onDragEnd = { if (startedInHeader && downward > 70.dp.toPx()) drawerOpen = false; downward = 0f },
                             onDragCancel = { downward = 0f }
                         ) { change, drag ->
-                            if (drag.y > 0f) downward += drag.y
-                            change.consume()
+                            if (startedInHeader && drag.y > 0f) {
+                                downward += drag.y
+                                change.consume()
+                            }
                         }
                     }
                     .padding(horizontal = 18.dp, vertical = 14.dp)

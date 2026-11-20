@@ -664,6 +664,7 @@ private fun ProstoContent(
     var appLanguage by remember { mutableStateOf(prefs.getString("app_language", "ru") ?: "ru") }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
+    var workspaceContextApp by remember { mutableStateOf<LauncherApp?>(null) }
     var workspaceEditMode by remember { mutableStateOf(false) }
     var confirmDeleteWorkspacePage by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
@@ -1269,7 +1270,10 @@ private fun ProstoContent(
                                                 }
                                             }
                                         } else if (from != null && target != null) moveApp(from, target)
-                                        if (from != null && isFolder && !movedFar) folderMenuKey = pkg
+                                        if (from != null && !movedFar) {
+                                            if (isFolder) folderMenuKey = pkg
+                                            else app?.let { workspaceContextApp = it }
+                                        }
                                         draggingIndex = null
                                         dropTargetIndex = null
                                     },
@@ -1783,68 +1787,48 @@ private fun ProstoContent(
             )
         }
 
+        workspaceContextApp?.let { app ->
+            AlertDialog(
+                onDismissRequest = { workspaceContextApp = null },
+                title = { Text(app.label) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            workspaceContextApp = null
+                            runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + app.packageName))) }
+                        }) { Text("ⓘ   О приложении", modifier = Modifier.fillMaxWidth()) }
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addToDock(app.packageName); workspaceContextApp = null }) {
+                            Text("⌂   В док", modifier = Modifier.fillMaxWidth())
+                        }
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            workspaceContextApp = null
+                            settingsOpen = true
+                            settingsPage = "icons"
+                        }) { Text("☷   Настроить значок", modifier = Modifier.fillMaxWidth()) }
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { workspaceContextApp = null; workspaceEditMode = true }) {
+                            Text("▦   Выбрать несколько", modifier = Modifier.fillMaxWidth())
+                        }
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { removeFromLauncher(app.packageName); workspaceContextApp = null }) {
+                            Text("✕   Убрать с экрана", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { workspaceContextApp = null }) { Text("Закрыть") } }
+            )
+        }
         selectedApp?.let { app ->
             val alreadyOnHome = app.packageName in workspacePackages
             AlertDialog(
                 onDismissRequest = { selectedApp = null },
                 title = { Text(app.label) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        if (!alreadyOnHome) {
-                            TextButton(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = { addToWorkspace(app.packageName); selectedApp = null; drawerOpen = false }
-                            ) { Text(tr("На главный экран", appLanguage), modifier = Modifier.fillMaxWidth()) }
-                        } else {
-                            TextButton(
-                                modifier = Modifier.fillMaxWidth(),
-                                onClick = {
-                                    removeFromLauncher(app.packageName)
-                                    selectedApp = null
-                                    Toast.makeText(context, "Убрано с главного экрана", Toast.LENGTH_SHORT).show()
-                                }
-                            ) {
-                                Text(tr("Убрать с главного экрана", appLanguage), color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                        TextButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = { addToDock(app.packageName); selectedApp = null; drawerOpen = false }
-                        ) { Text(tr("В нижн. панель", appLanguage), modifier = Modifier.fillMaxWidth()) }
-                        TextButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                selectedApp = null
-                                runCatching {
-                                    context.startActivity(Intent(
-                                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                        Uri.parse("package:${app.packageName}")
-                                    ))
-                                }
-                            }
-                        ) { Text(tr("О приложении", appLanguage), modifier = Modifier.fillMaxWidth()) }
-                        TextButton(
-                            modifier = Modifier.fillMaxWidth(),
-                            onClick = {
-                                selectedApp = null
-                                runCatching {
-                                    uninstallLauncher.launch(
-                                        Intent(Intent.ACTION_UNINSTALL_PACKAGE).apply {
-                                            data = Uri.parse("package:${app.packageName}")
-                                            putExtra(Intent.EXTRA_RETURN_RESULT, true)
-                                        }
-                                    )
-                                }.onFailure {
-                                    Toast.makeText(context, "Не удалось открыть удаление", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        ) {
-                            Text(tr("Удалить", appLanguage), color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !alreadyOnHome,
+                        onClick = { addToWorkspace(app.packageName); selectedApp = null; drawerOpen = false }
+                    ) { Text("Добавить на рабочий стол", modifier = Modifier.fillMaxWidth()) }
                 },
-                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text(tr("Закрыть", appLanguage)) } }
+                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text("Закрыть") } }
             )
         }
 

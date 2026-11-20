@@ -123,7 +123,6 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -2844,6 +2843,7 @@ private fun iconShape(choice: IconShapeChoice): Shape {
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun DockSlot(
     app: LauncherApp?,
     key: String,

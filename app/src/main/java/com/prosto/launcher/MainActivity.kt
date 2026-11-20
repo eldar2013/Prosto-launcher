@@ -78,6 +78,10 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.geometry.Rect
@@ -392,8 +396,8 @@ private fun ProstoContent(
     fun addOwnWidget(type: String) {
         val own = workspaceWidgets.filter { it.type != "android" }
         val id = (own.minOfOrNull { it.id } ?: 0) - 1
-        val width = gridCellPitch * 2f - 4f
-        val height = 86f
+        val width = gridCellPitch * 4f - 4f
+        val height = 120f
         val position = nextWidgetPosition(workspacePage, width, height)
         if (position == null) {
             Toast.makeText(context, "Нет свободного места для виджета", Toast.LENGTH_SHORT).show()
@@ -665,6 +669,7 @@ private fun ProstoContent(
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
     var workspaceContextApp by remember { mutableStateOf<LauncherApp?>(null) }
+    var workspaceContextAnchor by remember { mutableStateOf(Offset.Zero) }
     var workspaceEditMode by remember { mutableStateOf(false) }
     var confirmDeleteWorkspacePage by remember { mutableStateOf(false) }
     var now by remember { mutableStateOf(LocalDateTime.now()) }
@@ -868,7 +873,6 @@ private fun ProstoContent(
         saveDock(dockPackages.filterNot { it == pkg })
         slots[emptyIndex] = pkg
         saveWorkspace(slots)
-        Toast.makeText(context, "Добавлено: слот ${emptyIndex + 1}, страница ${workspacePage + 1}; значок ${if (apps.any { it.packageName == pkg }) "найден" else "не найден"}", Toast.LENGTH_LONG).show()
     }
     fun addToDock(pkg: String) {
         if (pkg in dockPackages) {
@@ -881,7 +885,6 @@ private fun ProstoContent(
         }
         saveWorkspace(workspacePackages.filterNot { it == pkg })
         saveDock(dockPackages + pkg)
-        Toast.makeText(context, "Добавлено в нижнюю панель", Toast.LENGTH_SHORT).show()
     }
     fun removeFromLauncher(pkg: String) {
         saveWorkspace(workspacePackages.map { if (it == pkg) "" else it })
@@ -1219,7 +1222,10 @@ private fun ProstoContent(
                                         movedFar = false
                                         if (app != null || isFolder) {
                                             // Show the context menu immediately; keep the drag gesture active.
-                                            if (app != null) workspaceContextApp = app
+                                            if (app != null) {
+                                                workspaceContextApp = app
+                                                workspaceContextAnchor = slotRects[index]?.let { Offset(it.left, it.bottom + 6f) } ?: Offset.Zero
+                                            }
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -1555,8 +1561,8 @@ private fun ProstoContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                DockSlot(dockApps.getOrNull(0), "dock-left-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
-                DockSlot(dockApps.getOrNull(1), "dock-left-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(0), "dock-left-1", blockedRects, iconShapeChoice, onLongClick = { a -> workspaceContextApp = a; workspaceContextAnchor = blockedRects["dock-left-1"]?.let { Offset(it.left, it.top - 4f) } ?: Offset.Zero }) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(1), "dock-left-2", blockedRects, iconShapeChoice, onLongClick = { a -> workspaceContextApp = a; workspaceContextAnchor = blockedRects["dock-left-2"]?.let { Offset(it.left, it.top - 4f) } ?: Offset.Zero }) { a, r -> launch(a.packageName, r) }
                 Surface(
                     modifier = Modifier.size(54.dp)
                         .onGloballyPositioned { blockedRects["drawer-button"] = it.boundsInRoot() }
@@ -1576,8 +1582,8 @@ private fun ProstoContent(
                         Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Все приложения", tint = DarkInk, modifier = Modifier.size(34.dp))
                     }
                 }
-                DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
-                DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice, onLongClick = { a -> workspaceContextApp = a; workspaceContextAnchor = blockedRects["dock-right-1"]?.let { Offset(it.left, it.top - 4f) } ?: Offset.Zero }) { a, r -> launch(a.packageName, r) }
+                DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice, onLongClick = { a -> workspaceContextApp = a; workspaceContextAnchor = blockedRects["dock-right-2"]?.let { Offset(it.left, it.top - 4f) } ?: Offset.Zero }) { a, r -> launch(a.packageName, r) }
             }
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 88.dp, top = 2.dp),
@@ -1791,9 +1797,23 @@ private fun ProstoContent(
 
         workspaceContextApp?.let { app ->
             val ru = appLanguage == "ru"
-            Dialog(onDismissRequest = { workspaceContextApp = null }) {
-                Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(28.dp), shadowElevation = 14.dp) {
+            val menuProgress = remember(app.packageName) { Animatable(0f) }
+            LaunchedEffect(app.packageName) { menuProgress.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 420f)) }
+            Popup(
+                alignment = Alignment.TopStart,
+                offset = IntOffset(workspaceContextAnchor.x.roundToInt(), workspaceContextAnchor.y.roundToInt()),
+                onDismissRequest = { workspaceContextApp = null },
+                properties = PopupProperties(focusable = true)
+            ) {
+                Column(
+                    Modifier.width(280.dp).graphicsLayer {
+                        alpha = menuProgress.value
+                        scaleX = 0.88f + 0.12f * menuProgress.value
+                        scaleY = 0.88f + 0.12f * menuProgress.value
+                    },
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
+                ) {
+                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp), shadowElevation = 14.dp) {
                         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
                                 workspaceContextApp = null
@@ -1810,7 +1830,7 @@ private fun ProstoContent(
                             }
                         }
                     }
-                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(28.dp), shadowElevation = 14.dp) {
+                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp, topStart = 0.dp, topEnd = 0.dp), shadowElevation = 14.dp) {
                         TextButton(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp), onClick = {
                             removeFromLauncher(app.packageName)
                             workspaceContextApp = null
@@ -2144,45 +2164,6 @@ private fun ProstoContent(
                                     )
                                 }
                                 val query = settingsQuery.trim()
-                                if (!isDefaultLauncher && query.isEmpty()) {
-                                    item {
-                                        Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.primaryContainer) {
-                                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                                    Surface(
-                                                        modifier = Modifier.size(72.dp),
-                                                        shape = iconShape(IconShapeChoice.COOKIE_9),
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                                                    ) {
-                                                        Box(contentAlignment = Alignment.Center) {
-                                                            Icon(Icons.Default.Home, contentDescription = null,
-                                                                tint = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(34.dp))
-                                                        }
-                                                    }
-                                                    Spacer(Modifier.width(16.dp))
-                                                    Column {
-                                                        Text(tr("Почти готово", appLanguage), fontSize = 26.sp,
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer)
-                                                        Text(tr("Сделайте его основным лаунчером", appLanguage), fontSize = 15.sp,
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
-                                                    }
-                                                }
-                                                Spacer(Modifier.height(16.dp))
-                                                Button(
-                                                    onClick = {
-                                                        runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
-                                                            .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } }
-                                                    },
-                                                    modifier = Modifier.fillMaxWidth().height(56.dp),
-                                                    shape = RoundedCornerShape(28.dp),
-                                                    colors = ButtonDefaults.buttonColors(
-                                                        containerColor = Color(0xFF74D3FF), contentColor = Color(0xFF00334B)
-                                                    )
-                                                ) { Text(tr("Сделать основным", appLanguage), fontSize = 17.sp) }
-                                            }
-                                        }
-                                    }
-                                }
                                 val visibleEntries = if (query.isEmpty()) settingsEntries else settingsEntries.filter {
                                     it.title.contains(query, ignoreCase = true) || it.subtitle.contains(query, ignoreCase = true)
                                 }
@@ -2868,11 +2849,12 @@ private fun DockSlot(
     key: String,
     blockedRects: MutableMap<String, Rect>,
     iconShapeChoice: IconShapeChoice,
+    onLongClick: (LauncherApp) -> Unit = {},
     onClick: (LauncherApp, Rect?) -> Unit
 ) {
     Box(Modifier.size(48.dp).onGloballyPositioned { blockedRects[key] = it.boundsInRoot() }, contentAlignment = Alignment.Center) {
         if (app != null) {
-            Box(Modifier.fillMaxSize().clickable { onClick(app, blockedRects[key]) }, contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().combinedClickable(onClick = { onClick(app, blockedRects[key]) }, onLongClick = { onLongClick(app) }), contentAlignment = Alignment.Center) {
                 AppImage(app, 46, iconShapeChoice)
             }
         }

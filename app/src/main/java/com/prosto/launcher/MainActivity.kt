@@ -1217,12 +1217,9 @@ private fun ProstoContent(
                                     onDragStart = { start ->
                                         pressStart = start
                                         movedFar = false
-                                        if (app != null) {
-                                            // Open the app actions immediately when the long press is recognized.
-                                            workspaceContextApp = app
-                                            draggingIndex = null
-                                            dropTargetIndex = null
-                                        } else if (isFolder) {
+                                        if (app != null || isFolder) {
+                                            // Show the context menu immediately; keep the drag gesture active.
+                                            if (app != null) workspaceContextApp = app
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -1234,7 +1231,10 @@ private fun ProstoContent(
                                     onDrag = { change, _ ->
                                         if (draggingIndex != null) {
                                             change.consume()
-                                            if ((change.position - pressStart).getDistance() > 24f) movedFar = true
+                                            if ((change.position - pressStart).getDistance() > 24f) {
+                                                movedFar = true
+                                                if (app != null) workspaceContextApp = null
+                                            }
                                             val rect = slotRects[index]
                                             dragPoint = slotCoordinates[index]?.localToRoot(change.position)
                                                 ?: rect?.let { Offset(it.left + change.position.x, it.top + change.position.y) }
@@ -1790,33 +1790,38 @@ private fun ProstoContent(
         }
 
         workspaceContextApp?.let { app ->
-            AlertDialog(
-                onDismissRequest = { workspaceContextApp = null },
-                title = { Text(app.label) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                            workspaceContextApp = null
-                            runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + app.packageName))) }
-                        }) { Text("ⓘ   App info", modifier = Modifier.fillMaxWidth()) }
-                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addToDock(app.packageName); workspaceContextApp = null }) {
-                            Text("⌂   Add to dock", modifier = Modifier.fillMaxWidth())
-                        }
-                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
-                            workspaceContextApp = null
-                            settingsOpen = true
-                            settingsPage = "icons"
-                        }) { Text("☷   Customize icon", modifier = Modifier.fillMaxWidth()) }
-                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { workspaceContextApp = null; workspaceEditMode = true }) {
-                            Text("▦   Select multiple", modifier = Modifier.fillMaxWidth())
-                        }
-                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = { removeFromLauncher(app.packageName); workspaceContextApp = null }) {
-                            Text("✕   Remove from home screen", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+            val ru = appLanguage == "ru"
+            Dialog(onDismissRequest = { workspaceContextApp = null }) {
+                Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(28.dp), shadowElevation = 14.dp) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                                workspaceContextApp = null
+                                runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + app.packageName))) }
+                            }) {
+                                Text("ⓘ", color = Color(0xFFE5E7EB), fontSize = 21.sp)
+                                Spacer(Modifier.width(14.dp))
+                                Text(if (ru) "О приложении" else "App info", color = Color(0xFFF3F4F6), modifier = Modifier.fillMaxWidth())
+                            }
+                            TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addToDock(app.packageName); workspaceContextApp = null }) {
+                                Text("⌂", color = Color(0xFFE5E7EB), fontSize = 23.sp)
+                                Spacer(Modifier.width(14.dp))
+                                Text(if (ru) "В док" else "Add to dock", color = Color(0xFFF3F4F6), modifier = Modifier.fillMaxWidth())
+                            }
                         }
                     }
-                },
-                confirmButton = { TextButton(onClick = { workspaceContextApp = null }) { Text("Close") } }
-            )
+                    Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(28.dp), shadowElevation = 14.dp) {
+                        TextButton(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp), onClick = {
+                            removeFromLauncher(app.packageName)
+                            workspaceContextApp = null
+                        }) {
+                            Text("✕", color = Color(0xFFF2A7B5), fontSize = 22.sp)
+                            Spacer(Modifier.width(14.dp))
+                            Text(if (ru) "Убрать с экрана" else "Remove from home screen", color = Color(0xFFF2A7B5), modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
         }
         selectedApp?.let { app ->
             val alreadyOnHome = app.packageName in workspacePackages
@@ -1828,9 +1833,9 @@ private fun ProstoContent(
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !alreadyOnHome,
                         onClick = { addToWorkspace(app.packageName); selectedApp = null; drawerOpen = false }
-                    ) { Text("Add to Home screen", modifier = Modifier.fillMaxWidth()) }
+                    ) { Text(if (appLanguage == "ru") "Добавить на рабочий стол" else "Add to Home screen", modifier = Modifier.fillMaxWidth()) }
                 },
-                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text("Close") } }
+                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text(if (appLanguage == "ru") "Закрыть" else "Close") } }
             )
         }
 

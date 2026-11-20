@@ -1278,6 +1278,11 @@ private fun ProstoContent(
                                         dropTargetIndex = null
                                     },
                                     onDragCancel = {
+                                        val from = draggingIndex
+                                        if (from != null && !movedFar) {
+                                            if (isFolder) folderMenuKey = pkg
+                                            else app?.let { workspaceContextApp = it }
+                                        }
                                         draggingIndex = null
                                         dropTargetIndex = null
                                     }

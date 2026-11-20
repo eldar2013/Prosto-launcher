@@ -106,6 +106,34 @@ import java.net.URL
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.WbSunny
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.ui.graphics.vector.ImageVector
 
 private data class WeatherCity(val name: String, val latitude: Double, val longitude: Double)
 private data class WeatherInfo(val temperature: Int, val description: String, val emoji: String)
@@ -629,6 +657,10 @@ private fun ProstoContent(
     var search by remember { mutableStateOf("") }
     var drawerOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var settingsPage by remember { mutableStateOf("") }
+    var settingsQuery by remember { mutableStateOf("") }
+    var isDefaultLauncher by remember { mutableStateOf(false) }
+    var expandedWidgetGroup by remember { mutableStateOf<String?>(null) }
     var appLanguage by remember { mutableStateOf(prefs.getString("app_language", "ru") ?: "ru") }
     var widgetsOpen by remember { mutableStateOf(false) }
     var quickMenuOpen by remember { mutableStateOf(false) }
@@ -910,6 +942,67 @@ private fun ProstoContent(
         .sortedBy { it.label.lowercase() }
     val drawerGridState = rememberLazyGridState()
     val drawerScope = rememberCoroutineScope()
+
+    // ---- Шторка приложений: выезжает снизу и следует за пальцем ----
+    // sheetOffset: 0 = шторка полностью открыта, drawerClosedOffset = убрана за нижний край экрана.
+    val drawerClosedOffset = with(LocalDensity.current) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    var drawerShown by remember { mutableStateOf(false) }
+    var sheetOffset by remember { mutableFloatStateOf(0f) }
+    LaunchedEffect(drawerOpen) {
+        if (drawerOpen) {
+            if (!drawerShown) {
+                sheetOffset = drawerClosedOffset
+                drawerShown = true
+            }
+            animate(sheetOffset, 0f, animationSpec = tween(380, easing = FastOutSlowInEasing)) { value, _ -> sheetOffset = value }
+        } else if (drawerShown) {
+            animate(sheetOffset, drawerClosedOffset, animationSpec = tween(320, easing = FastOutSlowInEasing)) { value, _ -> sheetOffset = value }
+            drawerShown = false
+        }
+    }
+    // Палец отпущен: закрыть шторку или вернуть её на место.
+    fun settleDrawer(velocityY: Float) {
+        val shouldClose = velocityY > 1400f || (sheetOffset > drawerClosedOffset * 0.28f && velocityY > -1400f)
+        if (shouldClose) {
+            drawerOpen = false
+        } else {
+            drawerScope.launch {
+                animate(sheetOffset, 0f, animationSpec = spring(dampingRatio = 0.85f, stiffness = 300f)) { value, _ -> sheetOffset = value }
+            }
+        }
+    }
+    // Если список приложений уже долистан до верха, то потянуть вниз можно в любом месте списка:
+    // шторка поедет за пальцем и закроется.
+    val drawerNestedScroll = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y < 0f && sheetOffset > 0f && source == NestedScrollSource.UserInput) {
+                    val used = maxOf(available.y, -sheetOffset)
+                    sheetOffset += used
+                    return Offset(0f, used)
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f && source == NestedScrollSource.UserInput) {
+                    sheetOffset += available.y
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (sheetOffset > 0f) {
+                    settleDrawer(available.y)
+                    return available
+                }
+                return Velocity.Zero
+            }
+        }
+    }
+    var alphabetHeight by remember { mutableIntStateOf(0) }
+    var activeLetter by remember { mutableStateOf<String?>(null) }
     val alphabet = remember(filteredApps) { filteredApps.map { it.label.firstOrNull()?.uppercaseChar()?.toString() ?: "#" }.distinct().sorted() }
     val alphabetTargets = remember(filteredApps) {
         filteredApps.mapIndexed { index, app -> (app.label.firstOrNull()?.uppercaseChar()?.toString() ?: "#") to index }
@@ -1479,9 +1572,6 @@ private fun ProstoContent(
                 DockSlot(dockApps.getOrNull(2), "dock-right-1", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
                 DockSlot(dockApps.getOrNull(3), "dock-right-2", blockedRects, iconShapeChoice) { a, r -> launch(a.packageName, r) }
             }
-            WaveformLine(
-                Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 28.dp).height(34.dp).padding(bottom = 138.dp)
-            )
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(bottom = 88.dp, top = 2.dp),
                 horizontalArrangement = Arrangement.Center,
@@ -1499,42 +1589,47 @@ private fun ProstoContent(
         }
         }
 
-        AnimatedVisibility(
-            visible = drawerOpen,
-            modifier = Modifier.fillMaxSize(),
-            enter = fadeIn(tween(240)) + scaleIn(initialScale = 0.94f, animationSpec = tween(300)) +
-                slideInVertically(initialOffsetY = { it / 6 }, animationSpec = tween(300)),
-            exit = fadeOut(tween(160)) + scaleOut(targetScale = 0.97f, animationSpec = tween(180)) +
-                slideOutVertically(targetOffsetY = { it / 8 }, animationSpec = tween(180))
-        ) {
+        if (drawerShown) {
+            // Затемнение рабочего стола: чем выше шторка, тем темнее. Нажатие по нему закрывает шторку.
+            // sheetOffset читается только при рисовании, поэтому анимация не перекомпонует весь экран.
+            Box(
+                Modifier.fillMaxSize()
+                    .drawBehind {
+                        val progress = (1f - sheetOffset / drawerClosedOffset).coerceIn(0f, 1f)
+                        drawRect(Color.Black.copy(alpha = 0.45f * progress))
+                    }
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { drawerOpen = false }
+            )
             Column(
-                Modifier.fillMaxSize().background(Color(0xFF171326).copy(alpha = 0.97f))
-                    .pointerInput(drawerOpen) {
-                        var downward = 0f
-                        var startedInHeader = false
-                        detectDragGestures(
-                            onDragStart = { start ->
-                                startedInHeader = start.y <= 90.dp.toPx()
-                                downward = 0f
-                            },
-                            onDragEnd = { if (startedInHeader && downward > 70.dp.toPx()) drawerOpen = false; downward = 0f },
-                            onDragCancel = { downward = 0f }
-                        ) { change, drag ->
-                            if (startedInHeader && drag.y > 0f) {
-                                downward += drag.y
-                                change.consume()
-                            }
+                Modifier.fillMaxSize()
+                    .offset { IntOffset(0, sheetOffset.roundToInt().coerceAtLeast(0)) }
+                    .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                    .background(Color(0xFF171326).copy(alpha = 0.97f))
+                    // Шторка забирает нажатия, чтобы они не доходили до рабочего стола под ней.
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { }
+                    .nestedScroll(drawerNestedScroll)
+                    .padding(horizontal = 18.dp)
+            ) {
+                // Шапка: за неё (и за ручку) тоже можно тянуть шторку вниз.
+                Column(
+                    Modifier.fillMaxWidth().draggable(
+                        orientation = Orientation.Vertical,
+                        state = rememberDraggableState { delta -> sheetOffset = (sheetOffset + delta).coerceAtLeast(0f) },
+                        onDragStopped = { velocity -> settleDrawer(velocity) }
+                    )
+                ) {
+                    Box(
+                        Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp, bottom = 6.dp)
+                            .width(36.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.35f))
+                    )
+                    Row(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Apps", color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+                        Surface(color = Lavender.copy(alpha = 0.18f), shape = RoundedCornerShape(18.dp)) {
+                            Text("${filteredApps.size}", color = Lavender, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp), fontWeight = FontWeight.Bold)
                         }
                     }
-                    .padding(horizontal = 18.dp, vertical = 14.dp)
-            ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Apps", color = Color.White, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                    Surface(color = Lavender.copy(alpha = 0.18f), shape = RoundedCornerShape(18.dp)) {
-                        Text("${filteredApps.size}", color = Lavender, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp), fontWeight = FontWeight.Bold)
-                    }
                 }
-                Row(Modifier.weight(1f).fillMaxWidth().padding(top = 12.dp, bottom = 8.dp)) {
+                Row(Modifier.weight(1f).fillMaxWidth().padding(top = 8.dp, bottom = 8.dp)) {
                     LazyVerticalGrid(
                         state = drawerGridState,
                         columns = GridCells.Adaptive(minSize = 76.dp),
@@ -1562,22 +1657,56 @@ private fun ProstoContent(
                         }
                     }
                     if (alphabet.isNotEmpty()) {
+                        // Алфавит на всю высоту списка: все буквы видны сразу, без прокрутки.
+                        // Можно нажать на букву или провести пальцем по столбцу.
+                        fun letterAt(y: Float): String? {
+                            if (alphabetHeight <= 0 || alphabet.isEmpty()) return null
+                            val index = (y / alphabetHeight * alphabet.size).toInt().coerceIn(0, alphabet.size - 1)
+                            return alphabet[index]
+                        }
+                        fun jumpToLetter(letter: String) {
+                            activeLetter = letter
+                            val target = alphabetTargets[letter] ?: 0
+                            drawerScope.launch { drawerGridState.scrollToItem(target) }
+                        }
+                        val slotDp = with(LocalDensity.current) { alphabetHeight.toDp() } / alphabet.size
+                        val letterSize = (slotDp.value * 0.78f).coerceIn(7f, 12f)
                         Column(
-                            modifier = Modifier.width(24.dp).fillMaxHeight().verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.Top,
+                            modifier = Modifier.width(26.dp).fillMaxHeight()
+                                .onSizeChanged { alphabetHeight = it.height }
+                                .pointerInput(alphabet, alphabetHeight) {
+                                    detectTapGestures(
+                                        onPress = { offset ->
+                                            letterAt(offset.y)?.let { jumpToLetter(it) }
+                                            tryAwaitRelease()
+                                            activeLetter = null
+                                        }
+                                    )
+                                }
+                                .pointerInput(alphabet, alphabetHeight) {
+                                    detectVerticalDragGestures(
+                                        onDragStart = { offset -> letterAt(offset.y)?.let { jumpToLetter(it) } },
+                                        onDragEnd = { activeLetter = null },
+                                        onDragCancel = { activeLetter = null }
+                                    ) { change, _ ->
+                                        change.consume()
+                                        letterAt(change.position.y)?.let { jumpToLetter(it) }
+                                    }
+                                },
+                            verticalArrangement = Arrangement.SpaceEvenly,
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             alphabet.forEach { letter ->
-                                Text(
-                                    letter,
-                                    color = Lavender,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.clickable {
-                                        val target = alphabetTargets[letter] ?: 0
-                                        drawerScope.launch { drawerGridState.animateScrollToItem(target) }
-                                    }.padding(vertical = 1.dp)
-                                )
+                                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text(
+                                        letter,
+                                        color = if (activeLetter == letter) Color.White else Lavender,
+                                        fontSize = letterSize.sp,
+                                        lineHeight = letterSize.sp,
+                                        maxLines = 1,
+                                        fontWeight = if (activeLetter == letter) FontWeight.Bold else FontWeight.SemiBold
+                                    )
+                                }
                             }
                         }
                     }
@@ -1585,7 +1714,7 @@ private fun ProstoContent(
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
                     singleLine = true,
                     shape = RoundedCornerShape(28.dp),
                     placeholder = { Text(tr("Поиск приложений", appLanguage)) },
@@ -1793,66 +1922,131 @@ private fun ProstoContent(
             )
         }
 
+        // Добавление виджета из списка установленных приложений (экран «Виджеты»).
+        fun startAddProviderWidget(info: AppWidgetProviderInfo) {
+            val id = appWidgetHost.allocateAppWidgetId()
+            val bound = runCatching { appWidgetManager.bindAppWidgetIdIfAllowed(id, info.provider) }.getOrDefault(false)
+            if (bound) {
+                widgetsOpen = false
+                continueWidgetAdd(id)
+            } else {
+                pendingPickId = id
+                val bindIntent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, info.provider)
+                }
+                val launched = runCatching { widgetBindLauncher.launch(bindIntent) }.isSuccess
+                if (launched) {
+                    widgetsOpen = false
+                } else {
+                    pendingPickId = null
+                    runCatching { appWidgetHost.deleteAppWidgetId(id) }
+                }
+            }
+        }
+
         if (widgetsOpen) {
+            val allProviders = remember { runCatching { appWidgetManager.installedProviders.toList() }.getOrDefault(emptyList()) }
+            val providerGroups = remember(allProviders, apps) {
+                allProviders.groupBy { it.provider.packageName }.map { (pkg, list) ->
+                    val label = appMap[pkg]?.label
+                        ?: runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrNull()
+                        ?: pkg
+                    Triple(pkg, label, list.sortedBy { runCatching { it.loadLabel(pm) }.getOrDefault("") })
+                }.sortedBy { it.second.lowercase() }
+            }
+            val ownWidgets = listOf(
+                "digital" to tr("Часы", appLanguage),
+                "analog" to tr("Аналоговые", appLanguage),
+                "date" to tr("Дата", appLanguage),
+                "weather" to tr("Погода", appLanguage)
+            )
+            val validHosted = hostedWidgetIds.filter { appWidgetManager.getAppWidgetInfo(it) != null }
             Dialog(
                 onDismissRequest = { widgetsOpen = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
             ) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(tr("Виджеты", appLanguage), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { widgetsOpen = false }) { Text(tr("Готово", appLanguage)) }
+                    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            ScreenBackButton { widgetsOpen = false }
+                            Spacer(Modifier.width(16.dp))
+                            Text(tr("Виджеты", appLanguage), fontSize = 34.sp, color = MaterialTheme.colorScheme.onBackground)
                         }
-                        Text(tr("Часы и дата", appLanguage), style = MaterialTheme.typography.titleMedium, color = Purple)
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = { addOwnWidget("digital"); widgetsOpen = false }) { Text(tr("Часы", appLanguage)) }
-                            FilledTonalButton(onClick = { addOwnWidget("analog"); widgetsOpen = false }) { Text(tr("Аналоговые", appLanguage)) }
-                            FilledTonalButton(onClick = { addOwnWidget("date"); widgetsOpen = false }) { Text(tr("Дата", appLanguage)) }
-                            FilledTonalButton(onClick = { requestWeatherWidget(); widgetsOpen = false }) { Text(tr("Погода", appLanguage)) }
-                        }
-                        Spacer(Modifier.height(18.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(tr("Другие виджеты", appLanguage), style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.weight(1f))
-                            FilledTonalButton(onClick = {
-                                val id = appWidgetHost.allocateAppWidgetId()
-                            pendingPickId = id
-                                val pick = Intent(AppWidgetManager.ACTION_APPWIDGET_PICK).apply {
-                                    putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
-                                }
-                                runCatching { widgetPicker.launch(pick) }
-                                    .onFailure { appWidgetHost.deleteAppWidgetId(id) }
-                            }) { Text(tr("Добавить", appLanguage)) }
-                        }
-                        Text(tr("Выбери виджет из приложений, установленных на устройстве.", appLanguage),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 12.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            lazyItems(hostedWidgetIds, key = { it }) { widgetId ->
-                                val provider = appWidgetManager.getAppWidgetInfo(widgetId)
-                                if (provider != null) {
-                                    Surface(
-                                        shape = RoundedCornerShape(18.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant
+                            // Встроенные виджеты Prosto
+                            item(key = "group-own") {
+                                ExpandableCard(
+                                    title = "Prosto",
+                                    subtitle = widgetCountText(ownWidgets.size, appLanguage),
+                                    expanded = expandedWidgetGroup == "own",
+                                    onToggle = { expandedWidgetGroup = if (expandedWidgetGroup == "own") null else "own" }
+                                ) {
+                                    ownWidgets.forEach { (type, label) ->
+                                        WidgetEntryRow(label = label, details = null, preview = null) {
+                                            if (type == "weather") requestWeatherWidget() else addOwnWidget(type)
+                                            widgetsOpen = false
+                                        }
+                                    }
+                                }
+                            }
+                            // Виджеты установленных приложений, сгруппированные по приложению
+                            lazyItems(providerGroups, key = { "group-" + it.first }) { (pkg, label, list) ->
+                                ExpandableCard(
+                                    title = label,
+                                    subtitle = widgetCountText(list.size, appLanguage),
+                                    expanded = expandedWidgetGroup == pkg,
+                                    onToggle = { expandedWidgetGroup = if (expandedWidgetGroup == pkg) null else pkg }
+                                ) {
+                                    list.forEach { info ->
+                                        val size = widgetSizeFor(info)
+                                        val cols = ((size.first + 4f) / gridCellPitch).roundToInt().coerceIn(1, 4)
+                                        val rows = ((size.second + 12f) / 98f).roundToInt().coerceIn(1, 5)
+                                        WidgetEntryRow(
+                                            label = runCatching { info.loadLabel(pm) }.getOrDefault(label),
+                                            details = "$cols×$rows",
+                                            preview = { ctx ->
+                                                runCatching { info.loadPreviewImage(ctx, 0) }.getOrNull()
+                                                    ?: runCatching { info.loadIcon(ctx, 0) }.getOrNull()
+                                            }
+                                        ) { startAddProviderWidget(info) }
+                                    }
+                                }
+                            }
+                            // Уже добавленные виджеты (можно удалить)
+                            if (validHosted.isNotEmpty()) {
+                                item(key = "group-added") {
+                                    ExpandableCard(
+                                        title = tr("Добавленные виджеты", appLanguage),
+                                        subtitle = widgetCountText(validHosted.size, appLanguage),
+                                        expanded = expandedWidgetGroup == "added",
+                                        onToggle = { expandedWidgetGroup = if (expandedWidgetGroup == "added") null else "added" }
                                     ) {
-                                        Column(Modifier.fillMaxWidth().padding(10.dp)) {
-                                            Text(provider.loadLabel(pm), style = MaterialTheme.typography.labelLarge)
-                                            AndroidView(
-                                                factory = { appWidgetHost.createView(it, widgetId, provider).apply {
-                                                    setAppWidget(widgetId, provider)
-                                                } },
-                                                modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp, max = 320.dp)
-                                            )
-                                            TextButton(onClick = {
-                                                appWidgetHost.deleteAppWidgetId(widgetId)
-                                                hostedWidgetIds = hostedWidgetIds - widgetId
-                                                prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
-                                            }) { Text(tr("Удалить виджет", appLanguage), color = MaterialTheme.colorScheme.error) }
+                                        validHosted.forEach { widgetId ->
+                                            val provider = appWidgetManager.getAppWidgetInfo(widgetId)
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    runCatching { provider?.loadLabel(pm) }.getOrNull() ?: "Widget",
+                                                    modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                IconButton(onClick = {
+                                                    appWidgetHost.deleteAppWidgetId(widgetId)
+                                                    hostedWidgetIds = hostedWidgetIds - widgetId
+                                                    prefs.edit().putString("hosted_widget_ids", hostedWidgetIds.joinToString(",")).apply()
+                                                    saveWorkspaceWidgets(workspaceWidgets.filterNot { it.id == widgetId })
+                                                }) {
+                                                    Icon(Icons.Default.Delete, contentDescription = tr("Удалить виджет", appLanguage),
+                                                        tint = MaterialTheme.colorScheme.error)
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -1863,117 +2057,248 @@ private fun ProstoContent(
             }
         }
 
+        LaunchedEffect(settingsOpen) {
+            if (settingsOpen) {
+                settingsPage = ""
+                settingsQuery = ""
+                isDefaultLauncher = runCatching {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+                    pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName == context.packageName
+                }.getOrDefault(false)
+            }
+        }
         if (settingsOpen) {
+            val shapeLabels = listOf(
+                IconShapeChoice.CIRCLE to "Circle",
+                IconShapeChoice.SQUARE to "Square",
+                IconShapeChoice.VERY_SUNNY to "Very sunny",
+                IconShapeChoice.COOKIE_9 to "9-sided cookie",
+                IconShapeChoice.SOFT_BURST to "Soft burst",
+                IconShapeChoice.CLOVER to "Clover"
+            )
+            val themeName = when (themeChoice) {
+                LauncherTheme.LIGHT -> tr("Светлая", appLanguage)
+                LauncherTheme.DARK -> tr("Тёмная", appLanguage)
+                else -> tr("Системная", appLanguage)
+            }
+            val languageName = if (appLanguage == "en") "English" else "Русский"
+            val cityName = if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else weatherCityName
+            // Пункты главного экрана настроек: id, раздел, иконка, название, описание.
+            val settingsEntries = listOf(
+                SettingsEntry("theme", "look", Icons.Default.Palette, tr("Тема", appLanguage), themeName),
+                SettingsEntry("icons", "look", Icons.Default.Apps, tr("Настройка иконок", appLanguage),
+                    shapeLabels.firstOrNull { it.first == iconShapeChoice }?.second ?: ""),
+                SettingsEntry("wallpaper", "look", Icons.Default.Image, tr("Обои", appLanguage),
+                    tr("Выбери изображение из галереи или верни стандартные обои.", appLanguage)),
+                SettingsEntry("folders", "look", Icons.Default.Folder, tr("Прозрачность папок", appLanguage),
+                    "${(folderOpacity * 100).toInt()}%"),
+                SettingsEntry("language", "general", Icons.Default.Language, tr("Язык", appLanguage), languageName),
+                SettingsEntry("weather", "general", Icons.Default.WbSunny, tr("Погода", appLanguage), cityName),
+                SettingsEntry("about", "general", Icons.Default.Info, "Prosto Launcher", "0.2.0")
+            )
             Dialog(
-                onDismissRequest = { settingsOpen = false },
+                onDismissRequest = { if (settingsPage.isNotEmpty()) settingsPage = "" else settingsOpen = false },
                 properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
             ) {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(tr("Настройки лаунчера", appLanguage), style = MaterialTheme.typography.headlineSmall,
-                                modifier = Modifier.weight(1f))
-                            TextButton(onClick = { settingsOpen = false }) { Text(tr("Готово", appLanguage)) }
-                        }
+                    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp)) {
+                        Spacer(Modifier.height(12.dp))
+                        ScreenBackButton { if (settingsPage.isNotEmpty()) settingsPage = "" else settingsOpen = false }
                         androidx.compose.foundation.lazy.LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(bottom = 30.dp),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 30.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            item {
-                                Text(tr("Язык", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                listOf("ru" to "Русский", "en" to "English").forEach { (code, label) ->
-                                    Row(Modifier.fillMaxWidth().clickable {
-                                        appLanguage = code
-                                        prefs.edit().putString("app_language", code).apply()
-                                    }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                        RadioButton(selected = appLanguage == code, onClick = {
-                                            appLanguage = code
-                                            prefs.edit().putString("app_language", code).apply()
-                                        })
-                                        Text(label)
+                            if (settingsPage.isEmpty()) {
+                                item {
+                                    Text(tr("Настройки", appLanguage), fontSize = 38.sp, color = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp, start = 4.dp))
+                                }
+                                item {
+                                    TextField(
+                                        value = settingsQuery,
+                                        onValueChange = { settingsQuery = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        shape = RoundedCornerShape(28.dp),
+                                        placeholder = { Text(tr("Найти настройку…", appLanguage)) },
+                                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                        colors = TextFieldDefaults.colors(
+                                            focusedIndicatorColor = Color.Transparent,
+                                            unfocusedIndicatorColor = Color.Transparent,
+                                            disabledIndicatorColor = Color.Transparent,
+                                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                    )
+                                }
+                                val query = settingsQuery.trim()
+                                if (!isDefaultLauncher && query.isEmpty()) {
+                                    item {
+                                        Surface(shape = RoundedCornerShape(32.dp), color = MaterialTheme.colorScheme.primaryContainer) {
+                                            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Surface(
+                                                        modifier = Modifier.size(72.dp),
+                                                        shape = iconShape(IconShapeChoice.COOKIE_9),
+                                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                                    ) {
+                                                        Box(contentAlignment = Alignment.Center) {
+                                                            Icon(Icons.Default.Home, contentDescription = null,
+                                                                tint = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(34.dp))
+                                                        }
+                                                    }
+                                                    Spacer(Modifier.width(16.dp))
+                                                    Column {
+                                                        Text(tr("Почти готово", appLanguage), fontSize = 26.sp,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                                        Text(tr("Сделайте его основным лаунчером", appLanguage), fontSize = 15.sp,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                                                    }
+                                                }
+                                                Spacer(Modifier.height(16.dp))
+                                                Button(
+                                                    onClick = {
+                                                        runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
+                                                            .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } }
+                                                    },
+                                                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                                                    shape = RoundedCornerShape(28.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = Color(0xFF74D3FF), contentColor = Color(0xFF00334B)
+                                                    )
+                                                ) { Text(tr("Сделать основным", appLanguage), fontSize = 17.sp) }
+                                            }
+                                        }
                                     }
                                 }
-                                Divider()
-                                Text(tr("Тема", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                ThemeRow(tr("Системная", appLanguage), themeChoice == LauncherTheme.SYSTEM) { onThemeChange(LauncherTheme.SYSTEM) }
-                                ThemeRow(tr("Светлая", appLanguage), themeChoice == LauncherTheme.LIGHT) { onThemeChange(LauncherTheme.LIGHT) }
-                                ThemeRow(tr("Тёмная", appLanguage), themeChoice == LauncherTheme.DARK) { onThemeChange(LauncherTheme.DARK) }
-                            }
-                            item {
-                                Divider()
-                                Text("Prosto Launcher 0.2.0", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                OutlinedButton(onClick = {
-                                    runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
-                                        .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } }
-                                }) { Text(tr("Сделать лаунчером по умолчанию", appLanguage)) }
-                            }
-                            item {
-                                Divider()
-                                Text(tr("Настройка иконок", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                listOf(IconShapeChoice.CIRCLE, IconShapeChoice.SQUARE, IconShapeChoice.VERY_SUNNY, IconShapeChoice.COOKIE_9, IconShapeChoice.SOFT_BURST, IconShapeChoice.CLOVER).forEach { choice ->
-                                    val label = when (choice) {
-                                        IconShapeChoice.CIRCLE -> "Circle"
-                                        IconShapeChoice.SQUARE -> "Square"
-                                        IconShapeChoice.VERY_SUNNY -> "Very sunny"
-                                        IconShapeChoice.COOKIE_9 -> "9-sided cookie"
-                                        IconShapeChoice.SOFT_BURST -> "Soft burst"
-                                        IconShapeChoice.CLOVER -> "Clover"
-                                    }
-                                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                        .clickable {
-                                            iconShapeChoice = choice
-                                            prefs.edit().putString("icon_shape", when (choice) {
-                                                IconShapeChoice.CIRCLE -> "CIRCLE"
-                                                IconShapeChoice.SQUARE -> "SQUARE"
-                                                IconShapeChoice.VERY_SUNNY -> "VERY_SUNNY"
-                                                IconShapeChoice.COOKIE_9 -> "COOKIE_9"
-                                                IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
-                                                IconShapeChoice.CLOVER -> "CLOVER"
-                                            }).apply()
-                                        }.padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically) {
-                                        RadioButton(selected = iconShapeChoice == choice, onClick = {
-                                            iconShapeChoice = choice
-                                            prefs.edit().putString("icon_shape", when (choice) {
-                                                IconShapeChoice.CIRCLE -> "CIRCLE"
-                                                IconShapeChoice.SQUARE -> "SQUARE"
-                                                IconShapeChoice.VERY_SUNNY -> "VERY_SUNNY"
-                                                IconShapeChoice.COOKIE_9 -> "COOKIE_9"
-                                                IconShapeChoice.SOFT_BURST -> "SOFT_BURST"
-                                                IconShapeChoice.CLOVER -> "CLOVER"
-                                            }).apply()
-                                        })
-                                        Spacer(Modifier.width(8.dp))
-                                        apps.firstOrNull()?.let { AppImage(it, 34, choice) }
-                                        Spacer(Modifier.width(10.dp))
-                                        Text(label)
+                                val visibleEntries = if (query.isEmpty()) settingsEntries else settingsEntries.filter {
+                                    it.title.contains(query, ignoreCase = true) || it.subtitle.contains(query, ignoreCase = true)
+                                }
+                                if (query.isNotEmpty() && visibleEntries.isEmpty()) {
+                                    item {
+                                        Text(tr("Ничего не найдено", appLanguage), color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp))
                                     }
                                 }
-                                Divider()
-                                Text(tr("Погода", appLanguage), style = MaterialTheme.typography.titleLarge, color = Purple)
-                                Text(if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else if (appLanguage == "en") "City: $weatherCityName" else "Город: $weatherCityName", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
-                                Text(tr("Погода обновляется автоматически. Ключ API не нужен.", appLanguage), style = MaterialTheme.typography.bodySmall)
-                                Divider()
-                                Text(tr("Прозрачность папок", appLanguage), style = MaterialTheme.typography.titleMedium)
-                                Text(tr("${(folderOpacity * 100).toInt()}%", appLanguage), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Slider(value = folderOpacity, onValueChange = {
-                                    folderOpacity = it
-                                    prefs.edit().putFloat("folder_opacity", it).apply()
-                                }, valueRange = 0.15f..1f)
-                                Divider()
-                                Text(tr("Обои", appLanguage), style = MaterialTheme.typography.titleMedium)
-                                Text(tr("Выбери изображение из галереи или верни стандартные обои.", appLanguage),
-                                    style = MaterialTheme.typography.bodySmall)
-                                OutlinedButton(onClick = { wallpaperPicker.launch(arrayOf("image/*")) }) {
-                                    Text(tr("Выбрать обои из галереи", appLanguage))
+                                listOf("look" to tr("Внешний вид", appLanguage), "general" to tr("Общие", appLanguage)).forEach { (section, sectionTitle) ->
+                                    val group = visibleEntries.filter { it.section == section }
+                                    if (group.isNotEmpty()) {
+                                        item(key = "section-$section") {
+                                            if (query.isEmpty()) {
+                                                Text(sectionTitle, color = MaterialTheme.colorScheme.primary, fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 20.dp, top = 12.dp))
+                                            }
+                                        }
+                                        item(key = "group-$section") {
+                                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                                group.forEachIndexed { index, entry ->
+                                                    val big = 28.dp
+                                                    val small = 6.dp
+                                                    val shape = RoundedCornerShape(
+                                                        topStart = if (index == 0) big else small, topEnd = if (index == 0) big else small,
+                                                        bottomStart = if (index == group.lastIndex) big else small,
+                                                        bottomEnd = if (index == group.lastIndex) big else small
+                                                    )
+                                                    SettingsRow(entry.icon, entry.title, entry.subtitle, shape) { settingsPage = entry.id }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
-                                if (wallpaperUri != null) {
-                                    TextButton(onClick = {
-                                        wallpaperUri = null
-                                        prefs.edit().remove("wallpaper_uri").apply()
-                                    }) { Text(tr("Вернуть стандартные обои", appLanguage)) }
+                            } else {
+                                val pageTitle = settingsEntries.firstOrNull { it.id == settingsPage }?.title ?: ""
+                                item {
+                                    Text(pageTitle, fontSize = 32.sp, color = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp, start = 4.dp))
+                                }
+                                when (settingsPage) {
+                                    "theme" -> item {
+                                        Column {
+                                            ThemeRow(tr("Системная", appLanguage), themeChoice == LauncherTheme.SYSTEM) { onThemeChange(LauncherTheme.SYSTEM) }
+                                            ThemeRow(tr("Светлая", appLanguage), themeChoice == LauncherTheme.LIGHT) { onThemeChange(LauncherTheme.LIGHT) }
+                                            ThemeRow(tr("Тёмная", appLanguage), themeChoice == LauncherTheme.DARK) { onThemeChange(LauncherTheme.DARK) }
+                                        }
+                                    }
+                                    "icons" -> item {
+                                        Column {
+                                            shapeLabels.forEach { (choice, label) ->
+                                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                                    .clickable {
+                                                        iconShapeChoice = choice
+                                                        prefs.edit().putString("icon_shape", choice.name).apply()
+                                                    }.padding(vertical = 4.dp),
+                                                    verticalAlignment = Alignment.CenterVertically) {
+                                                    RadioButton(selected = iconShapeChoice == choice, onClick = {
+                                                        iconShapeChoice = choice
+                                                        prefs.edit().putString("icon_shape", choice.name).apply()
+                                                    })
+                                                    Spacer(Modifier.width(8.dp))
+                                                    apps.firstOrNull()?.let { AppImage(it, 34, choice) }
+                                                    Spacer(Modifier.width(10.dp))
+                                                    Text(label)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "wallpaper" -> item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text(tr("Выбери изображение из галереи или верни стандартные обои.", appLanguage),
+                                                style = MaterialTheme.typography.bodyMedium)
+                                            OutlinedButton(onClick = { wallpaperPicker.launch(arrayOf("image/*")) }) {
+                                                Text(tr("Выбрать обои из галереи", appLanguage))
+                                            }
+                                            if (wallpaperUri != null) {
+                                                TextButton(onClick = {
+                                                    wallpaperUri = null
+                                                    prefs.edit().remove("wallpaper_uri").apply()
+                                                }) { Text(tr("Вернуть стандартные обои", appLanguage)) }
+                                            }
+                                        }
+                                    }
+                                    "folders" -> item {
+                                        Column {
+                                            Text(tr("${(folderOpacity * 100).toInt()}%", appLanguage), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Slider(value = folderOpacity, onValueChange = {
+                                                folderOpacity = it
+                                                prefs.edit().putFloat("folder_opacity", it).apply()
+                                            }, valueRange = 0.15f..1f)
+                                        }
+                                    }
+                                    "language" -> item {
+                                        Column {
+                                            listOf("ru" to "Русский", "en" to "English").forEach { (code, label) ->
+                                                Row(Modifier.fillMaxWidth().clickable {
+                                                    appLanguage = code
+                                                    prefs.edit().putString("app_language", code).apply()
+                                                }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                                                    RadioButton(selected = appLanguage == code, onClick = {
+                                                        appLanguage = code
+                                                        prefs.edit().putString("app_language", code).apply()
+                                                    })
+                                                    Text(label)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    "weather" -> item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text(if (weatherCityName.isBlank()) tr("Город не выбран", appLanguage) else if (appLanguage == "en") "City: $weatherCityName" else "Город: $weatherCityName",
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            OutlinedButton(onClick = { weatherCityDialog = true }) { Text(tr("Выбрать город", appLanguage)) }
+                                            Text(tr("Погода обновляется автоматически. Ключ API не нужен.", appLanguage), style = MaterialTheme.typography.bodySmall)
+                                        }
+                                    }
+                                    "about" -> item {
+                                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text("Prosto Launcher 0.2.0", style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            OutlinedButton(onClick = {
+                                                runCatching { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }
+                                                    .onFailure { runCatching { context.startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) } }
+                                            }) { Text(tr("Сделать лаунчером по умолчанию", appLanguage)) }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2223,6 +2548,14 @@ private fun ProstoContent(
 private fun tr(value: String, language: String): String {
     if (language != "en") return value
     return when (value) {
+        "Найти настройку…" -> "Search settings…"
+        "Почти готово" -> "Almost done"
+        "Сделайте его основным лаунчером" -> "Make it your default launcher"
+        "Сделать основным" -> "Set as default"
+        "Внешний вид" -> "Appearance"
+        "Общие" -> "General"
+        "Ничего не найдено" -> "Nothing found"
+        "Добавленные виджеты" -> "Added widgets"
         "Настройки лаунчера" -> "Launcher settings"
         "Сделать лаунчером по умолчанию" -> "Set as default launcher"
         "Готово" -> "Done"
@@ -2630,4 +2963,146 @@ private fun android.content.Context.findActivity(): android.app.Activity? {
         ctx = ctx.baseContext
     }
     return null
+}
+
+// ---------------- Общие элементы экранов «Настройки» и «Виджеты» ----------------
+
+private data class SettingsEntry(
+    val id: String,
+    val section: String,
+    val icon: ImageVector,
+    val title: String,
+    val subtitle: String
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScreenBackButton(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(44.dp)
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsRow(icon: ImageVector, title: String, subtitle: String, shape: Shape, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+                modifier = Modifier.size(46.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 17.sp, color = MaterialTheme.colorScheme.onSurface)
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun ExpandableCard(
+    title: String,
+    subtitle: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxWidth().clickable { onToggle() }.padding(horizontal = 24.dp, vertical = 20.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, fontSize = 19.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(
+                    Icons.Default.KeyboardArrowDown, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.rotate(if (expanded) 180f else 0f)
+                )
+            }
+            AnimatedVisibility(visible = expanded) {
+                Column(Modifier.fillMaxWidth().padding(bottom = 10.dp)) { content() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WidgetEntryRow(
+    label: String,
+    details: String?,
+    preview: ((android.content.Context) -> android.graphics.drawable.Drawable?)?,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 20.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (preview != null) {
+            AndroidView(
+                factory = { ctx ->
+                    ImageView(ctx).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setImageDrawable(preview(ctx))
+                    }
+                },
+                modifier = Modifier.size(72.dp).clip(RoundedCornerShape(14.dp))
+            )
+            Spacer(Modifier.width(14.dp))
+        }
+        Column(Modifier.weight(1f)) {
+            Text(label, fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurface, maxLines = 2,
+                overflow = TextOverflow.Ellipsis)
+            if (details != null) {
+                Text(details, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Icon(Icons.Default.Add, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+    }
+}
+
+private fun widgetCountText(count: Int, language: String): String {
+    if (language == "en") return if (count == 1) "1 widget" else "$count widgets"
+    val mod100 = count % 100
+    val mod10 = count % 10
+    val word = when {
+        mod100 in 11..14 -> "виджетов"
+        mod10 == 1 -> "виджет"
+        mod10 in 2..4 -> "виджета"
+        else -> "виджетов"
+    }
+    return "$count $word"
 }

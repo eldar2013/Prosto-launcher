@@ -1217,9 +1217,12 @@ private fun ProstoContent(
                                     onDragStart = { start ->
                                         pressStart = start
                                         movedFar = false
-                                        if (app != null || isFolder) {
-                                            // Перетаскивание не включает режим редактирования с нижним меню.
-                                            
+                                        if (app != null) {
+                                            // Open the app actions immediately when the long press is recognized.
+                                            workspaceContextApp = app
+                                            draggingIndex = null
+                                            dropTargetIndex = null
+                                        } else if (isFolder) {
                                             draggingIndex = index
                                             dropTargetIndex = null
                                             val rect = slotRects[index]
@@ -1270,19 +1273,13 @@ private fun ProstoContent(
                                                 }
                                             }
                                         } else if (from != null && target != null) moveApp(from, target)
-                                        if (from != null && !movedFar) {
-                                            if (isFolder) folderMenuKey = pkg
-                                            else app?.let { workspaceContextApp = it }
-                                        }
+                                        if (from != null && !movedFar && isFolder) folderMenuKey = pkg
                                         draggingIndex = null
                                         dropTargetIndex = null
                                     },
                                     onDragCancel = {
                                         val from = draggingIndex
-                                        if (from != null && !movedFar) {
-                                            if (isFolder) folderMenuKey = pkg
-                                            else app?.let { workspaceContextApp = it }
-                                        }
+                                        if (from != null && !movedFar && isFolder) folderMenuKey = pkg
                                         draggingIndex = null
                                         dropTargetIndex = null
                                     }
@@ -1801,24 +1798,24 @@ private fun ProstoContent(
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
                             workspaceContextApp = null
                             runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + app.packageName))) }
-                        }) { Text("ⓘ   О приложении", modifier = Modifier.fillMaxWidth()) }
+                        }) { Text("ⓘ   App info", modifier = Modifier.fillMaxWidth()) }
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = { addToDock(app.packageName); workspaceContextApp = null }) {
-                            Text("⌂   В док", modifier = Modifier.fillMaxWidth())
+                            Text("⌂   Add to dock", modifier = Modifier.fillMaxWidth())
                         }
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
                             workspaceContextApp = null
                             settingsOpen = true
                             settingsPage = "icons"
-                        }) { Text("☷   Настроить значок", modifier = Modifier.fillMaxWidth()) }
+                        }) { Text("☷   Customize icon", modifier = Modifier.fillMaxWidth()) }
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = { workspaceContextApp = null; workspaceEditMode = true }) {
-                            Text("▦   Выбрать несколько", modifier = Modifier.fillMaxWidth())
+                            Text("▦   Select multiple", modifier = Modifier.fillMaxWidth())
                         }
                         TextButton(modifier = Modifier.fillMaxWidth(), onClick = { removeFromLauncher(app.packageName); workspaceContextApp = null }) {
-                            Text("✕   Убрать с экрана", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
+                            Text("✕   Remove from home screen", color = MaterialTheme.colorScheme.error, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 },
-                confirmButton = { TextButton(onClick = { workspaceContextApp = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { workspaceContextApp = null }) { Text("Close") } }
             )
         }
         selectedApp?.let { app ->
@@ -1831,9 +1828,9 @@ private fun ProstoContent(
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !alreadyOnHome,
                         onClick = { addToWorkspace(app.packageName); selectedApp = null; drawerOpen = false }
-                    ) { Text("Добавить на рабочий стол", modifier = Modifier.fillMaxWidth()) }
+                    ) { Text("Add to Home screen", modifier = Modifier.fillMaxWidth()) }
                 },
-                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text("Закрыть") } }
+                confirmButton = { TextButton(onClick = { selectedApp = null }) { Text("Close") } }
             )
         }
 

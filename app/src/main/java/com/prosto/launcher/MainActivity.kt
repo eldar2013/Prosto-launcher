@@ -1110,29 +1110,9 @@ private fun ProstoContent(
         if (folderVisible) folderVisible = false else drawerOpen = false
     }
 
-    Box(
-        Modifier.fillMaxSize()
-            .onGloballyPositioned { rootInputOrigin = it.positionInRoot() }
-            .pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages, rootInputOrigin) {
-            detectTapGestures(
-                onTap = { point ->
-                    val blocked = blockedRects.any { (key, rect) ->
-                        val occupiedWorkspace = key.startsWith("workspace-") &&
-                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
-                        val occupiedDock = key.startsWith("dock-") &&
-                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
-                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
-                    }
-                    if (!blocked) {
-                        workspaceEditMode = false
-                        quickMenuOpen = false
-                        selectedWorkspaceWidget = null
-                        resizingWidgetId = null
-                    }
-                }
-            )
-        }
-    ) {
+
+    @Composable
+    fun MainWorkspaceLayer() {
         Box(Modifier.fillMaxSize()) {
         val activeWallpaper = customWallpaper ?: defaultWallpaper
         if (activeWallpaper != null) {
@@ -1601,6 +1581,32 @@ private fun ProstoContent(
         }
         }
 
+    }
+
+    Box(
+        Modifier.fillMaxSize()
+            .onGloballyPositioned { rootInputOrigin = it.positionInRoot() }
+            .pointerInput(drawerOpen, settingsOpen, widgetsOpen, quickMenuOpen, folderVisible, blockedRects.size, workspacePackages, dockPackages, rootInputOrigin) {
+            detectTapGestures(
+                onTap = { point ->
+                    val blocked = blockedRects.any { (key, rect) ->
+                        val occupiedWorkspace = key.startsWith("workspace-") &&
+                            workspacePackages.getOrNull(key.substringAfter("-").toIntOrNull() ?: -1).orEmpty().isNotBlank()
+                        val occupiedDock = key.startsWith("dock-") &&
+                            dockPackages.getOrNull(key.substringAfterLast("-").toIntOrNull()?.minus(1) ?: -1) != null
+                        (occupiedWorkspace || occupiedDock || key == "drawer-button") && rect.contains(point)
+                    }
+                    if (!blocked) {
+                        workspaceEditMode = false
+                        quickMenuOpen = false
+                        selectedWorkspaceWidget = null
+                        resizingWidgetId = null
+                    }
+                }
+            )
+        }
+    ) {
+        MainWorkspaceLayer()
         if (drawerShown) {
             // Затемнение рабочего стола: чем выше шторка, тем темнее. Нажатие по нему закрывает шторку.
             // sheetOffset читается только при рисовании, поэтому анимация не перекомпонует весь экран.

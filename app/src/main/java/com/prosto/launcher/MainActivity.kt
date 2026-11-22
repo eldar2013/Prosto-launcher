@@ -1606,7 +1606,19 @@ private fun ProstoContent(
             )
         }
     ) {
-        MainWorkspaceLayer()
+        try {
+            MainWorkspaceLayer()
+        } catch (error: Throwable) {
+            Column(
+                Modifier.fillMaxSize().background(Color.White).padding(20.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("Не удалось отобразить рабочий стол", color = Color.Black, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(12.dp))
+                Text(error.javaClass.name, color = Color.DarkGray)
+                Text(error.message ?: "Без подробностей", color = Color.DarkGray)
+            }
+        }
         if (drawerShown) {
             // Затемнение рабочего стола: чем выше шторка, тем темнее. Нажатие по нему закрывает шторку.
             // sheetOffset читается только при рисовании, поэтому анимация не перекомпонует весь экран.

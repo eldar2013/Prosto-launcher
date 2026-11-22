@@ -1796,22 +1796,8 @@ private fun ProstoContent(
 
         workspaceContextApp?.let { app ->
             val ru = appLanguage == "ru"
-            val menuProgress = remember(app.packageName) { Animatable(0f) }
-            LaunchedEffect(app.packageName) { menuProgress.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 420f)) }
-            Popup(
-                alignment = Alignment.TopStart,
-                offset = IntOffset(workspaceContextAnchor.x.roundToInt(), workspaceContextAnchor.y.roundToInt()),
-                onDismissRequest = { workspaceContextApp = null },
-                properties = PopupProperties(focusable = true)
-            ) {
-                Column(
-                    Modifier.width(280.dp).graphicsLayer {
-                        alpha = menuProgress.value
-                        scaleX = 0.88f + 0.12f * menuProgress.value
-                        scaleY = 0.88f + 0.12f * menuProgress.value
-                    },
-                    verticalArrangement = Arrangement.spacedBy(0.dp)
-                ) {
+            Dialog(onDismissRequest = { workspaceContextApp = null }) {
+                Column(Modifier.width(280.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     Surface(color = Color(0xFF171B20), shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp, bottomStart = 0.dp, bottomEnd = 0.dp), shadowElevation = 14.dp) {
                         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             TextButton(modifier = Modifier.fillMaxWidth(), onClick = {

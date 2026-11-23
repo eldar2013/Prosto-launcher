@@ -320,6 +320,14 @@ class MainActivity : ComponentActivity() {
 private fun ProstoHome() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("prosto_launcher", 0) }
+    // Сначала отдаём Android простой первый кадр, чтобы системная заставка
+    // гарантированно закрылась. Большой экран лаунчера подключаем после кадра.
+    var startupReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.withFrameNanos { }
+        kotlinx.coroutines.yield()
+        startupReady = true
+    }
     var themeChoice by remember {
         mutableStateOf(
             when (prefs.getString("theme_choice", "SYSTEM")) {
@@ -346,15 +354,29 @@ private fun ProstoHome() {
         surfaceVariant = Color(0xFFE8DFFF), onSurfaceVariant = Color(0xFF514767)
     )
     MaterialTheme(colorScheme = colors) {
-        ProstoContent(
-            prefs = prefs,
-            themeChoice = themeChoice,
-            dark = dark,
-            onThemeChange = {
-                themeChoice = it
-                prefs.edit().putString("theme_choice", it.name).apply()
+        if (startupReady) {
+            ProstoContent(
+                prefs = prefs,
+                themeChoice = themeChoice,
+                dark = dark,
+                onThemeChange = {
+                    themeChoice = it
+                    prefs.edit().putString("theme_choice", it.name).apply()
+                }
+            )
+        } else {
+            Box(
+                Modifier.fillMaxSize().background(if (dark) DarkInk else Color(0xFFF5F0FF)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "Prosto",
+                    color = if (dark) Lavender else Purple,
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
-        )
+        }
     }
 }
 
@@ -580,8 +602,14 @@ private fun ProstoContent(
             delay(3 * 60 * 60 * 1000L)
         }
     }
-    DisposableEffect(appWidgetHost) {
+    // Не запускаем AppWidgetHost во время первого Compose-кадра:
+    // на некоторых прошивках startListening блокирует главный поток через Binder.
+    LaunchedEffect(appWidgetHost) {
+        androidx.compose.runtime.withFrameNanos { }
+        kotlinx.coroutines.yield()
         runCatching { appWidgetHost.startListening() }
+    }
+    DisposableEffect(appWidgetHost) {
         onDispose { runCatching { appWidgetHost.stopListening() } }
     }
     var pendingConfigureId by remember { mutableStateOf<Int?>(null) }

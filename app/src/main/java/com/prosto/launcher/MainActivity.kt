@@ -820,20 +820,30 @@ private fun ProstoContent(
             prefs.edit().putString("wallpaper_uri", wallpaperUri).apply()
         }
     }
-    val defaultWallpaper = remember {
-        runCatching {
-            val encoded = context.resources.openRawResource(R.raw.prosto_wallpaper).bufferedReader().use { it.readText() }
-            val bytes = Base64.decode(encoded, Base64.DEFAULT)
-            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-        }.getOrNull()
-    }
-    val customWallpaper = remember(wallpaperUri) {
-        wallpaperUri?.let { raw ->
+    // Не читаем и не декодируем изображения обоев в главном потоке:
+    // на больших картинках это блокирует Compose и оставляет белый экран.
+    var defaultWallpaper by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var customWallpaper by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+
+    LaunchedEffect(Unit) {
+        defaultWallpaper = withContext(Dispatchers.IO) {
             runCatching {
-                context.contentResolver.openInputStream(Uri.parse(raw)).use { stream ->
-                    if (stream != null) BitmapFactory.decodeStream(stream)?.asImageBitmap() else null
-                }
+                val encoded = context.resources.openRawResource(R.raw.prosto_wallpaper).bufferedReader().use { it.readText() }
+                val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
             }.getOrNull()
+        }
+    }
+
+    LaunchedEffect(wallpaperUri) {
+        customWallpaper = withContext(Dispatchers.IO) {
+            wallpaperUri?.let { raw ->
+                runCatching {
+                    context.contentResolver.openInputStream(Uri.parse(raw)).use { stream ->
+                        if (stream != null) BitmapFactory.decodeStream(stream)?.asImageBitmap() else null
+                    }
+                }.getOrNull()
+            }
         }
     }
 

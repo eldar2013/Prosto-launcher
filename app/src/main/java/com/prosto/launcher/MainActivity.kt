@@ -716,7 +716,6 @@ private fun ProstoContent(
     var workspaceContextAnchor by remember { mutableStateOf(Offset.Zero) }
     var workspaceEditMode by remember { mutableStateOf(false) }
     var confirmDeleteWorkspacePage by remember { mutableStateOf(false) }
-    var now by remember { mutableStateOf(LocalDateTime.now()) }
 
     val oldHome = remember {
         prefs.getString("home_apps_ordered", null)?.split("|")?.filter { it.isNotBlank() }.orEmpty()
@@ -981,12 +980,6 @@ private fun ProstoContent(
         saveWorkspace(changed)
     }
 
-    LaunchedEffect(Unit) {
-        while (true) {
-            now = LocalDateTime.now()
-            delay(15_000)
-        }
-    }
     // Получение списка приложений и загрузка их значков выполняются в фоне:
     // на устройствах с большим числом приложений PackageManager может надолго
     // блокировать главный поток и оставлять лаунчер на пустом экране.
@@ -1540,15 +1533,10 @@ private fun ProstoContent(
                                 }
                                 Box(Modifier.weight(1f).fillMaxWidth().padding(5.dp), contentAlignment = Alignment.Center) {
                                     when (widget.type) {
-                                        "digital" -> DigitalClockWidget(now, appLanguage, Modifier.fillMaxSize())
+                                        "digital" -> DigitalClockWidget(appLanguage, Modifier.fillMaxSize())
                                         "weather" -> WeatherWidget(weatherCityName, weatherInfo, weatherLoading, weatherError, appLanguage, Modifier.fillMaxSize())
                                         "analog" -> AnalogClockWidget(Modifier.fillMaxSize())
-                                        "date" -> Surface(Modifier.fillMaxSize(), color = Color.Transparent) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", if (appLanguage == "en") Locale.ENGLISH else Locale("ru")) ),
-                                                    color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
-                                            }
-                                        }
+                                        "date" -> DateWidget(appLanguage, Modifier.fillMaxSize())
                                         "android" -> {
                                             val provider = widgetProvider
                                             if (provider != null) AndroidView(
@@ -2770,10 +2758,34 @@ private fun WaveformLine(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun DigitalClockWidget(now: LocalDateTime, language: String, modifier: Modifier = Modifier) {
+private fun DigitalClockWidget(language: String, modifier: Modifier = Modifier) {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            delay(15_000)
+        }
+    }
     Column(modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(now.format(DateTimeFormatter.ofPattern("HH:mm")), fontSize = 48.sp, fontWeight = FontWeight.Light, color = Color.White)
         Text(now.format(DateTimeFormatter.ofPattern("EEE, d MMMM", if (language == "en") Locale.ENGLISH else Locale("ru"))), color = Color.White.copy(alpha = 0.92f), fontSize = 17.sp)
+    }
+}
+
+@Composable
+private fun DateWidget(language: String, modifier: Modifier = Modifier) {
+    var now by remember { mutableStateOf(LocalDateTime.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            now = LocalDateTime.now()
+            delay(60_000)
+        }
+    }
+    Surface(modifier.fillMaxSize(), color = Color.Transparent) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(now.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", if (language == "en") Locale.ENGLISH else Locale("ru"))),
+                color = Lavender, fontSize = 17.sp, textAlign = TextAlign.Center)
+        }
     }
 }
 

@@ -110,6 +110,7 @@ import java.net.URL
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.roundToInt
 import androidx.compose.animation.core.animate
 import androidx.compose.foundation.gestures.Orientation
@@ -118,6 +119,7 @@ import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -320,14 +322,12 @@ class MainActivity : ComponentActivity() {
 private fun ProstoHome() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("prosto_launcher", 0) }
-    // Сначала отдаём Android простой первый кадр, чтобы системная заставка
-    // гарантированно закрылась. Большой экран лаунчера подключаем после кадра.
+    // Сначала действительно рисуем простой кадр, и только ПОСЛЕ завершения
+    // его отрисовки подключаем тяжёлый рабочий стол. withFrameNanos здесь недостаточен:
+    // он срабатывает до draw и мог переключить экран до того, как Android увидит кадр.
     var startupReady by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        androidx.compose.runtime.withFrameNanos { }
-        kotlinx.coroutines.yield()
-        startupReady = true
-    }
+    val firstFramePosted = remember { AtomicBoolean(false) }
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
     var themeChoice by remember {
         mutableStateOf(
             when (prefs.getString("theme_choice", "SYSTEM")) {
@@ -366,7 +366,16 @@ private fun ProstoHome() {
             )
         } else {
             Box(
-                Modifier.fillMaxSize().background(if (dark) DarkInk else Color(0xFFF5F0FF)),
+                Modifier.fillMaxSize()
+                    .background(if (dark) DarkInk else Color(0xFFF5F0FF))
+                    .drawWithContent {
+                        drawContent()
+                        // post выполняется после текущей отрисовки, поэтому заставка Android
+                        // успевает получить реальный кадр до композиции большого рабочего стола.
+                        if (firstFramePosted.compareAndSet(false, true)) {
+                            mainHandler.post { startupReady = true }
+                        }
+                    },
                 contentAlignment = Alignment.Center
             ) {
                 Text(

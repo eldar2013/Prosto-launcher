@@ -977,11 +977,19 @@ private fun ProstoContent(
             delay(15_000)
         }
     }
+    // Получение списка приложений и загрузка их значков выполняются в фоне:
+    // на устройствах с большим числом приложений PackageManager может надолго
+    // блокировать главный поток и оставлять лаунчер на пустом экране.
+    val appLoadScope = rememberCoroutineScope()
     val uninstallLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        apps = queryLauncherApps(context)
+        appLoadScope.launch {
+            val loadedApps = withContext(Dispatchers.IO) { queryLauncherApps(context) }
+            apps = loadedApps
+        }
     }
     LaunchedEffect(Unit) {
-        apps = queryLauncherApps(context)
+        val loadedApps = withContext(Dispatchers.IO) { queryLauncherApps(context) }
+        apps = loadedApps
     }
 
     val appMap = remember(apps) { apps.associateBy { it.packageName } }
